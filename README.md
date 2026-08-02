@@ -119,15 +119,20 @@ in `beatstudio.lz`.
 
 ## Performance, honestly
 
-This interpreter benchmarks at roughly 370K simple ops/sec. Rendering a
-short (1-2 bar) loop takes single-digit seconds; a full stereo master
-through the whole EQ→compressor→limiter→normalize chain takes on the
-order of a minute for a couple of seconds of audio. That's the real,
-measured cost of doing every DSP stage from scratch in an interpreted
-language with no dependencies - the same trade-off
+This is an offline "bounce" step, same as any real DAW's - not real-time,
+by construction (no interpreted language does real-time audio). How long
+that bounce takes depends a lot on the machine: on the constrained
+sandbox this was developed on (~370K simple ops/sec benchmarked), a full
+stereo master through the whole EQ→compressor→limiter→normalize chain
+took on the order of a minute for a couple of seconds of audio; the same
+test suite ran in **~18 seconds total** (both scenarios, including a
+2-track master) on a normal GitHub Actions runner - 4-5x faster. Expect
+real hardware to render considerably faster than the sandbox numbers,
+still meaningfully slower than a compiled DAW's bounce. That's the real
+cost of doing every DSP stage from scratch in an interpreted language
+with no dependencies - the same trade-off
 [`raytrace`](https://github.com/larz-scripter/larzscript-packages/tree/master/packages/raytrace)
-makes with deliberately tiny render resolutions. This is an offline
-"bounce" step, same as any real DAW's - not real-time.
+makes with deliberately tiny render resolutions.
 
 ## Recording, honestly
 
