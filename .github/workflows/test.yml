@@ -1,0 +1,18 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: install larzscript
+        run: curl -fsSL https://raw.githubusercontent.com/larz-scripter/larzscript/main/install.sh | sh
+      - name: install packages this project uses
+        run: |
+          mkdir -p ~/.larzscript/lib
+          for pkg in dsp wav random cli args json fs table; do
+            curl -fsSL "https://raw.githubusercontent.com/larz-scripter/larzscript-packages/master/packages/$pkg/main.lz" -o ~/.larzscript/lib/"$pkg".lz
+          done
+      - name: run tests
+        run: sh tests/run_tests.sh

@@ -1,0 +1,475 @@
+# LarzBeatStudio - a beat-making/recording/mixing/mastering studio,
+# written entirely in Larzscript.
+#
+# The point: every stage - the 4 synthesized drum voices, the 16-step
+# sequencer, the mixer, and the full EQ -> compressor -> limiter ->
+# normalize mastering chain - is real, from-scratch signal processing
+# (the `dsp` + `wav` packages), not a wrapper around ffmpeg or any other
+# audio tool. The one stage that genuinely can't be pure Larzscript -
+# capturing real audio from a microphone, which needs an OS audio driver
+# no interpreted language has bindings for - shells out to `arecord`
+# (ALSA), the same "hosted-only" honesty `crypto`'s X25519 disclaimer or
+# `net`/`fetch` being kernel-only already establish elsewhere in this
+# stack. Everything downstream of that one capture step - mixing,
+# mastering, export - is pure Larzscript again.
+#
+# And the professional master itself is money-native: `master` is a real
+# `pay` from a real `wallet` that fails closed without funds - the same
+# per-master pricing real mastering-as-a-service tools (LANDR and
+# similar) actually use, just enforced by the language's own `unless`/
+# `require` guardrail instead of a billing system bolted on afterward.
+# `preview` (mix + normalize only, no EQ/compression/limiting) is free,
+# so the whole pipeline is demoable without a funded wallet.
+#
+#   larzscript beatstudio.lz init --budget=20 --bpm=120
+#   larzscript beatstudio.lz step kick 0 on
+#   larzscript beatstudio.lz step snare 4 on
+#   larzscript beatstudio.lz beat-render
+#   larzscript beatstudio.lz mix beat --gain=-3
+#   larzscript beatstudio.lz preview
+#   larzscript beatstudio.lz master --price=2
+#
+# ---------------------------------------------------------------------
+# THE PERSISTENCE PATTERN (same one every larzscript-* showcase app in
+# this ecosystem uses - see larzscript-budget's budget.lz for the full
+# writeup): wallet/pay are real but scoped to ONE script execution. Each
+# run rehydrates the project's remaining budget as a real wallet from
+# cents stored in project.json, performs whatever real pay/unless this
+# invocation asked for, then writes the resulting balance back out.
+
+import "dsp" as dsp
+import "wav" as wav
+import "json" as json
+import "fs" as fs
+import "cli" as cli
+import "args" as argmod
+import "table" as table
+
+let SAMPLE_RATE = 22050
+let STEPS = 16
+let VOICES = ["kick", "snare", "hihat", "clap"]
+let PI = 3.141592653589793
+
+let DEFAULT_PATH = env("HOME", ".") + "/.larzbeatstudio/project.json"
+
+fn fail(msg) { print("error: " + msg); exit(1) }
+
+# ---- money helpers (cents <-> wallet, same round-trip every showcase app
+# in this ecosystem uses - see larzscript-budget's budget.lz) ----
+
+fn wallet_from_cents(c) {
+  wallet w = money(c / 100.0)
+  return w
+}
+
+fn fmt_cents(c) { return str(money(c / 100.0)) }
+
+fn parse_dollars(s) {
+  let parts = s.split(".")
+  let dollars = int(parts[0])
+  let c = 0
+  if len(parts) > 1 {
+    let frac = parts[1]
+    if len(frac) == 1 { frac = frac + "0" }
+    else if len(frac) > 2 { frac = frac[0:2] }
+    c = int(frac)
+  }
+  return dollars * 100 + c
+}
+
+# ---- drum synthesis - each returns a mono buffer, floats in [-1, 1] ----
+
+fn synth_kick() {
+  let dur = 0.25
+  let n = int(SAMPLE_RATE * dur)
+  let buf = []
+  let phase = 0.0
+  let i = 0
+  while i < n {
+    let t = i / float(SAMPLE_RATE)
+    let freq = 50.0 + 130.0 * dsp.envelope_exp(t, 45.0)
+    phase = phase + 2 * PI * freq / SAMPLE_RATE
+    let amp = dsp.envelope_exp(t, 16.0)
+    buf.push(dsp.sin_(phase) * amp)
+    i = i + 1
+  }
+  return buf
+}
+
+fn synth_snare() {
+  let dur = 0.18
+  let n = int(SAMPLE_RATE * dur)
+  let buf = []
+  let phase = 0.0
+  let i = 0
+  while i < n {
+    let t = i / float(SAMPLE_RATE)
+    phase = phase + 2 * PI * 190.0 / SAMPLE_RATE
+    let tone = dsp.sin_(phase) * dsp.envelope_exp(t, 35.0) * 0.5
+    let noise_hit = dsp.noise() * dsp.envelope_exp(t, 18.0) * 0.8
+    buf.push(tone + noise_hit)
+    i = i + 1
+  }
+  return buf
+}
+
+fn synth_hihat() {
+  let dur = 0.08
+  let n = int(SAMPLE_RATE * dur)
+  let buf = []
+  let i = 0
+  while i < n {
+    let t = i / float(SAMPLE_RATE)
+    buf.push(dsp.noise() * dsp.envelope_exp(t, 55.0) * 0.5)
+    i = i + 1
+  }
+  return buf
+}
+
+fn synth_clap() {
+  let dur = 0.25
+  let n = int(SAMPLE_RATE * dur)
+  let buf = []
+  let i = 0
+  while i < n { buf.push(0.0); i = i + 1 }
+  let offsets = [0.0, 0.012, 0.024]
+  for off in offsets {
+    let start = int(off * SAMPLE_RATE)
+    let j = start
+    while j < n {
+      let t = (j - start) / float(SAMPLE_RATE)
+      buf[j] = buf[j] + dsp.noise() * dsp.envelope_exp(t, 22.0) * 0.45
+      j = j + 1
+    }
+  }
+  return buf
+}
+
+fn synth_voice(name) {
+  if name == "kick" { return synth_kick() }
+  if name == "snare" { return synth_snare() }
+  if name == "hihat" { return synth_hihat() }
+  if name == "clap" { return synth_clap() }
+  fail("unknown voice '" + name + "' - choices: " + str(VOICES))
+}
+
+# ---- sequencer: render the 16-step pattern to one mono loop buffer ----
+
+fn render_pattern(pattern, bpm) {
+  let step_dur = 60.0 / bpm / 4.0
+  let loop_dur = step_dur * STEPS
+  let n = int(SAMPLE_RATE * loop_dur)
+  let buf = []
+  let z = 0
+  while z < n { buf.push(0.0); z = z + 1 }
+
+  for voice in VOICES {
+    let hit = synth_voice(voice)
+    let steps = pattern[voice]
+    let s = 0
+    while s < STEPS {
+      if steps[s] {
+        let start = int(s * step_dur * SAMPLE_RATE)
+        let k = 0
+        while k < len(hit) and start + k < n {
+          buf[start + k] = buf[start + k] + hit[k]
+          k = k + 1
+        }
+      }
+      s = s + 1
+    }
+  }
+  return buf
+}
+
+# ---- mixing: mono tracks (gain dB + pan) summed to an interleaved stereo buffer ----
+
+fn mix_to_stereo(p) {
+  let n = 0
+  for tr in p["tracks"] {
+    if not tr["mute"] {
+      let w = wav.read(tr["path"])
+      if len(w["samples"]) > n { n = len(w["samples"]) }
+    }
+  }
+  if n == 0 { fail("no audible tracks to mix - add a track first") }
+
+  let out = []
+  let i = 0
+  while i < n * 2 { out.push(0.0); i = i + 1 }
+
+  for tr in p["tracks"] {
+    if tr["mute"] { continue }
+    let w = wav.read(tr["path"])
+    let s = w["samples"]
+    let g = dsp.db_to_linear(tr["gain_db"])
+    let pan_angle = (tr["pan"] + 1) / 2 * (PI / 2)   # -1..1 -> 0..pi/2
+    let lg = dsp.cos_(pan_angle) * g
+    let rg = dsp.sin_(pan_angle) * g
+    let j = 0
+    while j < len(s) {
+      out[j * 2] = out[j * 2] + s[j] * lg
+      out[j * 2 + 1] = out[j * 2 + 1] + s[j] * rg
+      j = j + 1
+    }
+  }
+  return out
+}
+
+# ---- mastering: EQ runs independently per channel (a fixed linear filter
+# needs no linking); the compressor is LINKED (one gain per frame, from
+# the louder of L/R, applied to both) so the stereo image doesn't wobble;
+# limit()/normalize_to() already work correctly on the whole interleaved
+# buffer since they're global/pointwise, not per-sample stateful. ----
+
+fn master_chain(stereo, low_db, mid_db, high_db) {
+  let low_l = dsp.biquad_shelf_new(200, low_db, SAMPLE_RATE, false)
+  let low_r = dsp.biquad_shelf_new(200, low_db, SAMPLE_RATE, false)
+  let mid_l = dsp.biquad_peaking_new(2000, mid_db, 0.8, SAMPLE_RATE)
+  let mid_r = dsp.biquad_peaking_new(2000, mid_db, 0.8, SAMPLE_RATE)
+  let high_l = dsp.biquad_shelf_new(6000, high_db, SAMPLE_RATE, true)
+  let high_r = dsp.biquad_shelf_new(6000, high_db, SAMPLE_RATE, true)
+
+  let eqd = []
+  let i = 0
+  while i < len(stereo) {
+    let l = dsp.biquad_process(high_l, dsp.biquad_process(mid_l, dsp.biquad_process(low_l, stereo[i])))
+    let r = dsp.biquad_process(high_r, dsp.biquad_process(mid_r, dsp.biquad_process(low_r, stereo[i + 1])))
+    eqd.push(l); eqd.push(r)
+    i = i + 2
+  }
+
+  let comp = dsp.compressor_new(-14.0, 3.0, 8.0, 120.0, SAMPLE_RATE)
+  let compd = []
+  i = 0
+  while i < len(eqd) {
+    let l = eqd[i]
+    let r = eqd[i + 1]
+    let al = l < 0 ? -l : l
+    let ar = r < 0 ? -r : r
+    let level = al > ar ? al : ar
+    let gain = dsp.compressor_gain(comp, level)
+    compd.push(l * gain); compd.push(r * gain)
+    i = i + 2
+  }
+
+  let limited = dsp.limit(compd, -0.3)
+  return dsp.normalize_to(limited, -1.0)
+}
+
+# ---- persistence ----
+
+fn empty_pattern() {
+  let p = {}
+  for v in VOICES { p[v] = [false] * STEPS }
+  return p
+}
+
+fn load_project(path) {
+  if not fs.exists(path) { fail("no project at " + path + " - run 'init' first") }
+  return json.parse(read_file(path))
+}
+
+fn save_project(path, p) {
+  let dir = fs.dirname(path)
+  if not fs.exists(dir) { fs.mkdirs(dir) }
+  write_file(path, json.stringify(p))
+}
+
+fn dir_of(path) { return fs.dirname(path) }
+
+# ---- commands ----
+
+fn cmd_init(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let budget_str = argmod.flag(a, "budget", "0")
+  let bpm = float(argmod.flag(a, "bpm", "120"))
+  let p = {
+    "bpm": bpm, "budget_cents": parse_dollars(budget_str), "spent_cents": 0,
+    "pattern": empty_pattern(), "tracks": [], "masters": [],
+  }
+  save_project(path, p)
+  print("project created: bpm=" + str(bpm) + ", budget=" + fmt_cents(p["budget_cents"]))
+}
+
+fn cmd_step(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 3 { fail("usage: step VOICE STEP on|off") }
+  let voice = a["positional"][0]
+  let step_i = int(a["positional"][1])
+  let onoff = a["positional"][2]
+  if not (voice in VOICES) { fail("unknown voice '" + voice + "' - choices: " + str(VOICES)) }
+  if step_i < 0 or step_i >= STEPS { fail("step must be 0-" + str(STEPS - 1)) }
+  let p = load_project(path)
+  p["pattern"][voice][step_i] = onoff == "on"
+  save_project(path, p)
+  print(voice + " step " + str(step_i) + " -> " + onoff)
+}
+
+fn cmd_beat_render(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let p = load_project(path)
+  let buf = render_pattern(p["pattern"], p["bpm"])
+  let out_path = dir_of(path) + "/beat.wav"
+  wav.write(out_path, buf, SAMPLE_RATE)
+  let existing = -1
+  let i = 0
+  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == "beat" { existing = i } i = i + 1 }
+  let track = {"name": "beat", "path": out_path, "gain_db": 0.0, "pan": 0.0, "mute": false}
+  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+  save_project(path, p)
+  print("beat rendered: " + str(round(len(buf) / float(SAMPLE_RATE), 2)) + "s -> " + out_path)
+}
+
+fn cmd_record(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 { fail("usage: record NAME --seconds=N") }
+  let name = a["positional"][0]
+  let seconds = argmod.flag(a, "seconds", "4")
+  let p = load_project(path)
+  let out_path = dir_of(path) + "/" + name + ".wav"
+  let cmd = "arecord -q -f S16_LE -r " + str(SAMPLE_RATE) + " -c 1 -d " + seconds + " " + out_path
+  let code = run(cmd)
+  if code != 0 { fail("arecord failed (exit " + str(code) + ") - is a microphone available? command: " + cmd) }
+  let existing = -1
+  let i = 0
+  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { existing = i } i = i + 1 }
+  let track = {"name": name, "path": out_path, "gain_db": 0.0, "pan": 0.0, "mute": false}
+  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+  save_project(path, p)
+  print("recorded " + seconds + "s -> " + out_path)
+}
+
+fn cmd_track_import(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 { fail("usage: track-import WAVPATH --name=NAME") }
+  let src = a["positional"][0]
+  let name = argmod.flag(a, "name", nil)
+  if name == nil { fail("usage: track-import WAVPATH --name=NAME") }
+  if not fs.exists(src) { fail("no such file: " + src) }
+  let w = wav.read(src)
+  let p = load_project(path)
+  let out_path = dir_of(path) + "/" + name + ".wav"
+  wav.write(out_path, w["samples"], SAMPLE_RATE, w["channels"])
+  let existing = -1
+  let i = 0
+  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { existing = i } i = i + 1 }
+  let track = {"name": name, "path": out_path, "gain_db": 0.0, "pan": 0.0, "mute": false}
+  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+  save_project(path, p)
+  print("imported " + src + " as track '" + name + "'")
+}
+
+fn cmd_mix(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 { fail("usage: mix NAME --gain=DB --pan=P --mute") }
+  let name = a["positional"][0]
+  let p = load_project(path)
+  let found = -1
+  let i = 0
+  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { found = i } i = i + 1 }
+  if found < 0 { fail("no track named '" + name + "'") }
+  if a["flags"].has("gain") { p["tracks"][found]["gain_db"] = float(a["flags"]["gain"]) }
+  if a["flags"].has("pan") { p["tracks"][found]["pan"] = float(a["flags"]["pan"]) }
+  if a["flags"].has("mute") { p["tracks"][found]["mute"] = a["flags"]["mute"] == true or a["flags"]["mute"] == "true" }
+  if a["flags"].has("unmute") { p["tracks"][found]["mute"] = false }
+  save_project(path, p)
+  let t = p["tracks"][found]
+  print(name + ": gain=" + str(t["gain_db"]) + "dB pan=" + str(t["pan"]) + " mute=" + str(t["mute"]))
+}
+
+fn cmd_preview(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let p = load_project(path)
+  let stereo = mix_to_stereo(p)
+  let normalized = dsp.normalize_to(stereo, -3.0)
+  let out_path = dir_of(path) + "/preview.wav"
+  wav.write(out_path, normalized, SAMPLE_RATE, 2)
+  print("preview (free, mix + normalize only, no EQ/compression/limiting): " + out_path)
+  print("peak: " + str(round(dsp.peak_dbfs(normalized), 2)) + " dBFS")
+}
+
+fn cmd_master(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let price_str = argmod.flag(a, "price", nil)
+  if price_str == nil { fail("usage: master --price=DOLLARS") }
+  let price_cents = parse_dollars(price_str)
+  let low_db = float(argmod.flag(a, "low", "1.5"))
+  let mid_db = float(argmod.flag(a, "mid", "0"))
+  let high_db = float(argmod.flag(a, "high", "2"))
+
+  let p = load_project(path)
+  wallet studio_wallet = money((p["budget_cents"] - p["spent_cents"]) / 100.0)
+  wallet mastering_engineer
+  let master_price = money(price_cents / 100.0)
+  unless studio_wallet.balance >= master_price {
+    fail("can't afford a professional master (" + fmt_cents(price_cents) +
+         " needed, " + fmt_cents(p["budget_cents"] - p["spent_cents"]) + " remaining)")
+  }
+
+  let stereo = mix_to_stereo(p)
+
+  pay master_price from studio_wallet to mastering_engineer
+
+  let mastered = master_chain(stereo, low_db, mid_db, high_db)
+  let n = len(p["masters"])
+  let out_path = dir_of(path) + "/master_" + str(n + 1) + ".wav"
+  wav.write(out_path, mastered, SAMPLE_RATE, 2)
+
+  p["spent_cents"] = p["spent_cents"] + price_cents
+  # peak_dbfs()/rms_dbfs() are computed into locals FIRST, not called
+  # inline as dict-literal values - after enough prior allocation (a
+  # multi-second audio buffer's worth), evaluating a function call while
+  # a dict literal's earlier keys are still pending corrupts those key
+  # strings in the native interpreter. Reported upstream; this is the
+  # workaround until it's fixed. See larz-scripter/larzscript issues.
+  let final_peak = dsp.peak_dbfs(mastered)
+  let final_rms = dsp.rms_dbfs(mastered)
+  p["masters"].push({"path": out_path, "price_cents": price_cents,
+                      "peak_dbfs": final_peak, "rms_dbfs": final_rms})
+  save_project(path, p)
+
+  print("mastered -> " + out_path)
+  print("peak: " + str(round(dsp.peak_dbfs(mastered), 2)) + " dBFS, rms: " + str(round(dsp.rms_dbfs(mastered), 2)) + " dBFS")
+  print("charged: " + fmt_cents(price_cents) + ", remaining: " + fmt_cents(p["budget_cents"] - p["spent_cents"]))
+}
+
+fn cmd_report(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let p = load_project(path)
+  print("bpm: " + str(p["bpm"]))
+  print("")
+  let rows = [["Voice", "Steps"]]
+  for v in VOICES {
+    let s = ""
+    for on in p["pattern"][v] { s = s + (on ? "X" : ".") }
+    rows.push([v, s])
+  }
+  print(table.render(rows))
+  print("")
+  let trows = [["Track", "Gain (dB)", "Pan", "Mute"]]
+  for t in p["tracks"] { trows.push([t["name"], str(t["gain_db"]), str(t["pan"]), str(t["mute"])]) }
+  print(table.render(trows))
+  print("")
+  if len(p["masters"]) > 0 {
+    let m = p["masters"][len(p["masters"]) - 1]
+    print("last master: " + m["path"] + " (peak " + str(round(m["peak_dbfs"], 2)) + " dBFS)")
+  }
+  print("budget: " + fmt_cents(p["budget_cents"]) + "  spent: " + fmt_cents(p["spent_cents"]) +
+        "  remaining: " + fmt_cents(p["budget_cents"] - p["spent_cents"]))
+}
+
+# ---- entry point ----
+
+let app = cli.new("beatstudio", "a beat-making/recording/mixing/mastering studio, written in Larzscript")
+cli.command(app, "init", "start a project: init --budget=DOLLARS --bpm=N", fn(a) { cmd_init(a) })
+cli.command(app, "step", "program the pattern: step VOICE STEP on|off", fn(a) { cmd_step(a) })
+cli.command(app, "beat-render", "synthesize the drum pattern to a track (free)", fn(a) { cmd_beat_render(a) })
+cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord): record NAME --seconds=N", fn(a) { cmd_record(a) })
+cli.command(app, "track-import", "add an existing WAV as a track: track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
+cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
+cli.command(app, "preview", "free: mix + normalize only, no mastering chain", fn(a) { cmd_preview(a) })
+cli.command(app, "master", "paid: full EQ->compressor->limiter->normalize chain: master --price=DOLLARS", fn(a) { cmd_master(a) })
+cli.command(app, "report", "show the pattern, tracks, and budget", fn(a) { cmd_report(a) })
+
+cli.run(app, args)
