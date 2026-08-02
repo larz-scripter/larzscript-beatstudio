@@ -120,7 +120,12 @@ fn synth_hihat() {
   let i = 0
   while i < n {
     let t = i / float(SAMPLE_RATE)
-    buf.push(dsp.noise() * dsp.envelope_exp(t, 55.0) * 0.5)
+    # Spectral analysis (RMS 0.095 vs kick's 0.25/snare's 0.20/clap's
+    # 0.14) showed this sitting noticeably under the other three voices
+    # once the pattern's straight-8th hihat run is the busiest thing
+    # happening - 0.5 -> 0.7 brings it into the same ballpark without
+    # burying the kick/snare underneath it.
+    buf.push(dsp.noise() * dsp.envelope_exp(t, 55.0) * 0.7)
     i = i + 1
   }
   return buf
@@ -272,6 +277,28 @@ fn empty_pattern() {
   return p
 }
 
+# Comma-separated arrangement spec, e.g. "main*8,fill,main*8" -> a real
+# song structure of repeated/varied bars, not just one bar looped
+# identically for the whole render. `NAME` or `NAME*N`.
+fn parse_arrangement(spec, patterns) {
+  let out = []
+  for token in spec.split(",") {
+    let t = token.strip()
+    if t == "" { continue }
+    let name = t
+    let count = 1
+    if t.contains("*") {
+      let parts = t.split("*")
+      name = parts[0]
+      count = int(parts[1])
+    }
+    if not patterns.has(name) { fail("unknown pattern '" + name + "' - add it first with pattern-add") }
+    let i = 0
+    while i < count { out.push(name); i = i + 1 }
+  }
+  return out
+}
+
 fn load_project(path) {
   if not fs.exists(path) { fail("no project at " + path + " - run 'init' first") }
   return json.parse(read_file(path))
@@ -293,7 +320,8 @@ fn cmd_init(a) {
   let bpm = float(argmod.flag(a, "bpm", "120"))
   let p = {
     "bpm": bpm, "budget_cents": parse_dollars(budget_str), "spent_cents": 0,
-    "pattern": empty_pattern(), "tracks": [], "masters": [],
+    "patterns": {"main": empty_pattern()}, "arrangement": [],
+    "tracks": [], "masters": [],
   }
   save_project(path, p)
   print("project created: bpm=" + str(bpm) + ", budget=" + fmt_cents(p["budget_cents"]))
@@ -308,15 +336,67 @@ fn cmd_step(a) {
   if not (voice in VOICES) { fail("unknown voice '" + voice + "' - choices: " + str(VOICES)) }
   if step_i < 0 or step_i >= STEPS { fail("step must be 0-" + str(STEPS - 1)) }
   let p = load_project(path)
-  p["pattern"][voice][step_i] = onoff == "on"
+  p["patterns"]["main"][voice][step_i] = onoff == "on"
   save_project(path, p)
-  print(voice + " step " + str(step_i) + " -> " + onoff)
+  print("main " + voice + " step " + str(step_i) + " -> " + onoff)
+}
+
+fn cmd_pattern_add(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 { fail("usage: pattern-add NAME") }
+  let name = a["positional"][0]
+  let p = load_project(path)
+  if not p["patterns"].has(name) { p["patterns"][name] = empty_pattern() }
+  save_project(path, p)
+  print("pattern '" + name + "' ready")
+}
+
+fn cmd_pattern_step(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 4 { fail("usage: pattern-step NAME VOICE STEP on|off") }
+  let name = a["positional"][0]
+  let voice = a["positional"][1]
+  let step_i = int(a["positional"][2])
+  let onoff = a["positional"][3]
+  if not (voice in VOICES) { fail("unknown voice '" + voice + "' - choices: " + str(VOICES)) }
+  if step_i < 0 or step_i >= STEPS { fail("step must be 0-" + str(STEPS - 1)) }
+  let p = load_project(path)
+  if not p["patterns"].has(name) { p["patterns"][name] = empty_pattern() }
+  p["patterns"][name][voice][step_i] = onoff == "on"
+  save_project(path, p)
+  print(name + " " + voice + " step " + str(step_i) + " -> " + onoff)
+}
+
+fn cmd_arrange(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 { fail("usage: arrange SPEC (e.g. main*8,fill,main*8)") }
+  let spec = a["positional"][0]
+  let p = load_project(path)
+  let expanded = parse_arrangement(spec, p["patterns"])
+  p["arrangement"] = expanded
+  save_project(path, p)
+  let bars = len(expanded)
+  let bar_dur = 60.0 / p["bpm"] / 4.0 * STEPS
+  print("arrangement: " + str(bars) + " bars (" + str(round(bars * bar_dur, 1)) + "s) -> " + str(expanded))
 }
 
 fn cmd_beat_render(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   let p = load_project(path)
-  let buf = render_pattern(p["pattern"], p["bpm"])
+  let bar_names = len(p["arrangement"]) > 0 ? p["arrangement"] : ["main"]
+  let buf = []
+  for name in bar_names {
+    if not p["patterns"].has(name) { fail("arrangement references unknown pattern '" + name + "'") }
+    let bar = render_pattern(p["patterns"][name], p["bpm"])
+    buf = buf + bar
+  }
+  # Real, measured problem, not a guess: with all 4 voices at their
+  # individually-tuned amplitudes, a step where several hit together
+  # (snare+clap+hihat on the backbeat, in particular) can sum past +/-1.0
+  # - spectral analysis of a render caught 35 samples hard-clipped exactly
+  # at the wav.write() clamp boundary on such a step. Limiting the raw
+  # beat buffer (not just the final master) fixes this at the source.
+  buf = dsp.limit(buf, -1.0)
   let out_path = dir_of(path) + "/beat.wav"
   wav.write(out_path, buf, SAMPLE_RATE)
   let existing = -1
@@ -469,14 +549,23 @@ fn cmd_report(a) {
   let p = load_project(path)
   print("bpm: " + str(p["bpm"]))
   print("")
-  let rows = [["Voice", "Steps"]]
-  for v in VOICES {
-    let s = ""
-    for on in p["pattern"][v] { s = s + (on ? "X" : ".") }
-    rows.push([v, s])
+  for name in sorted(keys(p["patterns"])) {
+    print("pattern '" + name + "':")
+    let rows = [["Voice", "Steps"]]
+    for v in VOICES {
+      let s = ""
+      for on in p["patterns"][name][v] { s = s + (on ? "X" : ".") }
+      rows.push([v, s])
+    }
+    print(table.render(rows))
+    print("")
   }
-  print(table.render(rows))
-  print("")
+  if len(p["arrangement"]) > 0 {
+    let bar_dur = 60.0 / p["bpm"] / 4.0 * STEPS
+    print("arrangement (" + str(len(p["arrangement"])) + " bars, " +
+          str(round(len(p["arrangement"]) * bar_dur, 1)) + "s): " + str(p["arrangement"]))
+    print("")
+  }
   let trows = [["Track", "Gain (dB)", "Pan", "Mute"]]
   for t in p["tracks"] { trows.push([t["name"], str(t["gain_db"]), str(t["pan"]), str(t["mute"])]) }
   print(table.render(trows))
@@ -493,8 +582,11 @@ fn cmd_report(a) {
 
 let app = cli.new("beatstudio", "a beat-making/recording/mixing/mastering studio, written in Larzscript")
 cli.command(app, "init", "start a project: init --budget=DOLLARS --bpm=N", fn(a) { cmd_init(a) })
-cli.command(app, "step", "program the pattern: step VOICE STEP on|off", fn(a) { cmd_step(a) })
-cli.command(app, "beat-render", "synthesize the drum pattern to a track (free)", fn(a) { cmd_beat_render(a) })
+cli.command(app, "step", "program the 'main' pattern: step VOICE STEP on|off", fn(a) { cmd_step(a) })
+cli.command(app, "pattern-add", "create a new named pattern: pattern-add NAME", fn(a) { cmd_pattern_add(a) })
+cli.command(app, "pattern-step", "program a named pattern: pattern-step NAME VOICE STEP on|off", fn(a) { cmd_pattern_step(a) })
+cli.command(app, "arrange", "chain patterns into a song: arrange main*8,fill,main*8", fn(a) { cmd_arrange(a) })
+cli.command(app, "beat-render", "synthesize the arrangement (or just 'main') to a track (free)", fn(a) { cmd_beat_render(a) })
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord): record NAME --seconds=N", fn(a) { cmd_record(a) })
 cli.command(app, "track-import", "add an existing WAV as a track: track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
