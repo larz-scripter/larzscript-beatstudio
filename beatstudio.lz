@@ -202,14 +202,21 @@ fn mix_to_stereo(p) {
     if tr["mute"] { continue }
     let w = wav.read(tr["path"])
     let s = w["samples"]
+    let slen = len(s)
+    if slen == 0 { continue }
     let g = dsp.db_to_linear(tr["gain_db"])
     let pan_angle = (tr["pan"] + 1) / 2 * (PI / 2)   # -1..1 -> 0..pi/2
     let lg = dsp.cos_(pan_angle) * g
     let rg = dsp.sin_(pan_angle) * g
+    # A track shorter than the mix (almost always the beat loop, under a
+    # longer vocal take) LOOPS to fill the full duration instead of
+    # playing once and going silent - `j % slen` wraps it. For the
+    # single longest track this is a no-op (n == slen, never wraps).
     let j = 0
-    while j < len(s) {
-      out[j * 2] = out[j * 2] + s[j] * lg
-      out[j * 2 + 1] = out[j * 2 + 1] + s[j] * rg
+    while j < n {
+      let sample = s[j % slen]
+      out[j * 2] = out[j * 2] + sample * lg
+      out[j * 2 + 1] = out[j * 2 + 1] + sample * rg
       j = j + 1
     }
   }
@@ -348,9 +355,32 @@ fn cmd_track_import(a) {
   if name == nil { fail("usage: track-import WAVPATH --name=NAME") }
   if not fs.exists(src) { fail("no such file: " + src) }
   let w = wav.read(src)
+  # Every track downstream (mix_to_stereo's per-track pan/loop logic) is
+  # mono - downmix a stereo source instead of silently corrupting the
+  # mix by treating its interleaved L/R as if they were mono samples.
+  let samples = w["samples"]
+  if w["channels"] > 1 {
+    let ch = w["channels"]
+    let down = []
+    let i = 0
+    while i < len(samples) {
+      let sum = 0.0
+      let c = 0
+      while c < ch { sum = sum + samples[i + c]; c = c + 1 }
+      down.push(sum / ch)
+      i = i + ch
+    }
+    samples = down
+  }
+  # A WAV header claims a sample rate; playing it back at a DIFFERENT
+  # rate changes pitch/speed, not just labeling. Actually resample if the
+  # source isn't already at SAMPLE_RATE, rather than relabeling it.
+  if w["sample_rate"] != SAMPLE_RATE {
+    samples = dsp.resample(samples, w["sample_rate"], SAMPLE_RATE)
+  }
   let p = load_project(path)
   let out_path = dir_of(path) + "/" + name + ".wav"
-  wav.write(out_path, w["samples"], SAMPLE_RATE, w["channels"])
+  wav.write(out_path, samples, SAMPLE_RATE, 1)
   let existing = -1
   let i = 0
   while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { existing = i } i = i + 1 }
