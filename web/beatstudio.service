@@ -1,0 +1,14 @@
+[Unit]
+Description=LarzBeatStudio upload/status API (larzos.com/beatstudio/)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/beatstudio
+ExecStart=/usr/bin/python3 /opt/beatstudio/backend.py
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
