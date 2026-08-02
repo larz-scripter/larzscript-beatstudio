@@ -190,12 +190,19 @@ fn render_pattern(pattern, bpm) {
 # ---- mixing: mono tracks (gain dB + pan) summed to an interleaved stereo buffer ----
 
 fn mix_to_stereo(p) {
+  # Read each track's WAV exactly once (wav.read()'s per-sample decode
+  # loop is real work, not free - reading every file twice, once just to
+  # find the longest track's length and again to mix, nearly doubled
+  # this function's cost for no reason; measured live via the automated
+  # per-session pipeline timing out on a mix that shouldn't have been
+  # anywhere near that slow).
+  let loaded = []
   let n = 0
   for tr in p["tracks"] {
-    if not tr["mute"] {
-      let w = wav.read(tr["path"])
-      if len(w["samples"]) > n { n = len(w["samples"]) }
-    }
+    if tr["mute"] { continue }
+    let w = wav.read(tr["path"])
+    loaded.push({"track": tr, "samples": w["samples"]})
+    if len(w["samples"]) > n { n = len(w["samples"]) }
   }
   if n == 0 { fail("no audible tracks to mix - add a track first") }
 
@@ -203,10 +210,9 @@ fn mix_to_stereo(p) {
   let i = 0
   while i < n * 2 { out.push(0.0); i = i + 1 }
 
-  for tr in p["tracks"] {
-    if tr["mute"] { continue }
-    let w = wav.read(tr["path"])
-    let s = w["samples"]
+  for entry in loaded {
+    let tr = entry["track"]
+    let s = entry["samples"]
     let slen = len(s)
     if slen == 0 { continue }
     let g = dsp.db_to_linear(tr["gain_db"])
