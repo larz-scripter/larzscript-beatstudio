@@ -57,7 +57,7 @@ def write_status(d, status, **extra):
     os.replace(tmp, os.path.join(d, "status.json"))
 
 
-def run(cmd, timeout=120, **kw):
+def run(cmd, timeout=180, **kw):
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            universal_newlines=True, timeout=timeout, **kw)
 
