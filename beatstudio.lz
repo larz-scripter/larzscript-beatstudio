@@ -240,39 +240,58 @@ fn mix_to_stereo(p) {
 # limit()/normalize_to() already work correctly on the whole interleaved
 # buffer since they're global/pointwise, not per-sample stateful. ----
 
-fn master_chain(stereo, low_db, mid_db, high_db) {
+# Mutates `buf` (the caller's mix_to_stereo output) in place through
+# every stage instead of building a fresh full-length list per stage
+# (EQ'd, then compressed, then limited, then normalized - 4+ complete
+# copies of what can be several million samples for a long recording).
+# Not a style preference: a 60-second render OOM-killed on the 1.9GB
+# production box before this change (confirmed via dmesg, not guessed -
+# "Out of memory: Killed process ... larzscript"), and every session on
+# that same box carries the same risk at a smaller scale. Lists are
+# passed by reference (verified), so index-assigning into `buf` is
+# real in-place mutation, not disguised copying.
+fn master_chain(buf, low_db, mid_db, high_db) {
   let low_l = dsp.biquad_shelf_new(200, low_db, SAMPLE_RATE, false)
   let low_r = dsp.biquad_shelf_new(200, low_db, SAMPLE_RATE, false)
   let mid_l = dsp.biquad_peaking_new(2000, mid_db, 0.8, SAMPLE_RATE)
   let mid_r = dsp.biquad_peaking_new(2000, mid_db, 0.8, SAMPLE_RATE)
   let high_l = dsp.biquad_shelf_new(6000, high_db, SAMPLE_RATE, true)
   let high_r = dsp.biquad_shelf_new(6000, high_db, SAMPLE_RATE, true)
-
-  let eqd = []
-  let i = 0
-  while i < len(stereo) {
-    let l = dsp.biquad_process(high_l, dsp.biquad_process(mid_l, dsp.biquad_process(low_l, stereo[i])))
-    let r = dsp.biquad_process(high_r, dsp.biquad_process(mid_r, dsp.biquad_process(low_r, stereo[i + 1])))
-    eqd.push(l); eqd.push(r)
-    i = i + 2
-  }
-
   let comp = dsp.compressor_new(-14.0, 3.0, 8.0, 120.0, SAMPLE_RATE)
-  let compd = []
-  i = 0
-  while i < len(eqd) {
-    let l = eqd[i]
-    let r = eqd[i + 1]
+  let ceiling = dsp.db_to_linear(-0.3)
+
+  let n = len(buf)
+  let i = 0
+  while i < n {
+    # EQ (per channel, no linking needed - a fixed linear filter)
+    let l = dsp.biquad_process(high_l, dsp.biquad_process(mid_l, dsp.biquad_process(low_l, buf[i])))
+    let r = dsp.biquad_process(high_r, dsp.biquad_process(mid_r, dsp.biquad_process(low_r, buf[i + 1])))
+    # Compressor (linked - one gain per frame, from the louder channel)
     let al = l < 0 ? -l : l
     let ar = r < 0 ? -r : r
-    let level = al > ar ? al : ar
-    let gain = dsp.compressor_gain(comp, level)
-    compd.push(l * gain); compd.push(r * gain)
+    let gain = dsp.compressor_gain(comp, al > ar ? al : ar)
+    l = l * gain
+    r = r * gain
+    # Limiter (brickwall clamp)
+    if l > ceiling { l = ceiling } else if l < -ceiling { l = -ceiling }
+    if r > ceiling { r = ceiling } else if r < -ceiling { r = -ceiling }
+    buf[i] = l
+    buf[i + 1] = r
     i = i + 2
   }
 
-  let limited = dsp.limit(compd, -0.3)
-  return dsp.normalize_to(limited, -1.0)
+  # Normalize: a read-only peak scan, then scale in place - no new
+  # buffer either.
+  let peak = 0.0
+  i = 0
+  while i < n { let a = buf[i] < 0 ? -buf[i] : buf[i]; if a > peak { peak = a } i = i + 1 }
+  if peak > 0 {
+    let target = dsp.db_to_linear(-1.0)
+    let g = target / peak
+    i = 0
+    while i < n { buf[i] = buf[i] * g; i = i + 1 }
+  }
+  return buf
 }
 
 # ---- persistence ----
