@@ -1,0 +1,8 @@
+error: no paid master yet for this project - run 'master --price=DOLLARS' first
+mastered -> PROJECT_DIR/master_1.wav
+peak: -1.55 dBFS, rms: -25.31 dBFS
+charged: $2.00, remaining: $18.00
+mastered -> PROJECT_DIR/master_2.wav
+peak: -5.47 dBFS, rms: -27.97 dBFS
+remaster is free - already unlocked by this project's first master
+budget: $20.00  spent: $2.00  remaining: $18.00

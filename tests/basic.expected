@@ -3,13 +3,13 @@ main snare step 4 -> on
 main hihat step 2 -> on
 main clap step 8 -> on
 beat rendered: 1.71s -> PROJECT_DIR/beat.wav
-imported PROJECT_DIR/beat.wav as track 'extra'
+imported PROJECT_DIR/beat.wav as track 'extra' (1.71s)
 beat: gain=0dB pan=0 mute=false
 extra: gain=-6dB pan=0.5 mute=false
-preview (free, mix + normalize only, no EQ/compression/limiting): PROJECT_DIR/preview.wav
-peak: -3 dBFS
+preview (free, mix + safety limiter only, no EQ/compression): PROJECT_DIR/preview.wav
+peak: -1 dBFS
 mastered -> PROJECT_DIR/master_1.wav
-peak: -1 dBFS, rms: -23.53 dBFS
+peak: -1 dBFS, rms: -22.87 dBFS
 charged: $1.00, remaining: $19.00
 bpm: 140
 
@@ -21,10 +21,10 @@ pattern 'main':
 | hihat | ..X............. |
 | clap  | ........X....... |
 
-| Track | Gain (dB) | Pan | Mute  |
-|-------|-----------|-----|-------|
-| beat  | 0         | 0   | false |
-| extra | -6        | 0.5 | false |
+| Track | Length (s) | Gain (dB) | Pan | Mute  |
+|-------|------------|-----------|-----|-------|
+| beat  | 1.7        | 0         | 0   | false |
+| extra | 1.7        | -6        | 0.5 | false |
 
 last master: PROJECT_DIR/master_1.wav (peak -1 dBFS)
 budget: $20.00  spent: $1.00  remaining: $19.00

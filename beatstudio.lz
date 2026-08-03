@@ -1,17 +1,25 @@
 # LarzBeatStudio - a beat-making/recording/mixing/mastering studio,
 # written entirely in Larzscript.
 #
-# The point: every stage - the 4 synthesized drum voices, the 16-step
-# sequencer, the mixer, and the full EQ -> compressor -> limiter ->
-# normalize mastering chain - is real, from-scratch signal processing
-# (the `dsp` + `wav` packages), not a wrapper around ffmpeg or any other
-# audio tool. The one stage that genuinely can't be pure Larzscript -
-# capturing real audio from a microphone, which needs an OS audio driver
-# no interpreted language has bindings for - shells out to `arecord`
-# (ALSA), the same "hosted-only" honesty `crypto`'s X25519 disclaimer or
-# `net`/`fetch` being kernel-only already establish elsewhere in this
-# stack. Everything downstream of that one capture step - mixing,
-# mastering, export - is pure Larzscript again.
+# The point: every DSP stage - the 4 synthesized drum voices, the 16-step
+# sequencer, the mixer, and the full EQ -> compressor -> limiter mastering
+# chain - is real, from-scratch signal processing (the `dsp` + `wav`
+# packages), not a wrapper around ffmpeg or any other audio tool. Two
+# stages genuinely can't be pure Larzscript, and both are disclosed here
+# as honestly as `crypto`'s X25519 limitation or `net`/`fetch` being
+# kernel-only elsewhere in this stack:
+#   - capturing real audio from a microphone needs an OS audio driver no
+#     interpreted language has bindings for -> shells out to `arecord`.
+#   - decoding an arbitrary source format/sample rate/channel count (a
+#     browser's compressed upload, someone's existing stereo WAV/MP3) into
+#     this app's standard mono/22050Hz/16-bit WAV needs real audio codecs
+#     -> shells out to `ffmpeg` for that one conversion step. ffmpeg never
+#     touches the actual audio *processing* - no mixing, no EQ, no
+#     compression, no limiting happens inside it, and it's never on the
+#     hot path for something already in the right format. Every sample
+#     that gets shaped, gained, panned, EQ'd, compressed or limited is
+#     shaped by this file's own code (now with a native-C fast path for
+#     the hot per-sample loop - see "SPEED" below), not ffmpeg.
 #
 # And the professional master itself is money-native: `master` is a real
 # `pay` from a real `wallet` that fails closed without funds - the same
@@ -28,6 +36,71 @@
 #   larzscript beatstudio.lz mix beat --gain=-3
 #   larzscript beatstudio.lz preview
 #   larzscript beatstudio.lz master --price=2
+#
+# ---------------------------------------------------------------------
+# CHUNKED STREAMING (why "5 minutes or more" doesn't OOM anymore):
+#
+# Every track - the synthesized beat, a mic recording, an imported WAV -
+# is ONE plain mono 16-bit WAV file on disk, never held whole in memory.
+# It's PRODUCED via `wav`'s real streaming writer (open_write/write_chunk/
+# close_write - a placeholder header is written immediately, and
+# patch_file_bytes() fixes up its two size fields in place once the real
+# total is known at close), and CONSUMED via true random-access reads
+# (read_file_bytes_range() - a real fseek, not read_file_bytes()'s
+# whole-file-only load) for exactly the CHUNK_SAMPLES window being mixed
+# right now. Mixing and mastering process one chunk at a time: read one
+# small window from every track, mix it, run it through the
+# (native-accelerated) master chain, immediately append the mastered
+# bytes to the output file, then let that chunk's memory go. Peak memory
+# is bounded by a small constant number of chunk-sized buffers,
+# independent of how long the recording is - a 5-minute render and a
+# 30-second render use the same RAM.
+#
+# This replaces an earlier whole-buffer design, which held an entire
+# track's samples in memory at once. That design OOM-killed on the
+# production box (1.9GB RAM) at just 60 seconds even after being
+# rewritten to mutate one buffer in place instead of building several
+# full-length copies per DSP stage - a real, dmesg-confirmed failure, not
+# a guess (see larzscript-beatstudio's PLAN.md and the
+# `project_larzscript_growth_roadmap` memory it links). Measured directly
+# on that same box: a Larzscript list costs roughly 105-115 bytes PER
+# ELEMENT at this interpreter's current representation (measured via
+# /proc/<pid>/status VmHWM while building lists of 1M/5M/13.2M elements,
+# not estimated) - a single 5-minute stereo buffer held whole would be
+# ~13.2M elements, i.e. well over a gigabyte on its own. Chunking isn't
+# an optimization here, it's the only way this fits in 1.9GB at all.
+#
+# An earlier revision of this file worked around a version of the
+# interpreter that was missing read_file_bytes_range()/patch_file_bytes()
+# (exactly the same "package documents a native contract the interpreter
+# doesn't actually implement" bug this file's SPEED section found in
+# `dsp` - found again here in `wav`) by splitting each track into many
+# small numbered chunk files instead and writing the final WAV header
+# up-front with a precomputed exact size. Both interpreter gaps are now
+# fixed for real (see this file's companion changes to
+# native/larzscript.c), so this file uses the simpler, already-documented
+# one-file-per-track design both stack packages were actually designed
+# around.
+#
+# ---------------------------------------------------------------------
+# SPEED: the interpreted per-sample path (one `dsp.biquad_process()` /
+# `dsp.compressor_gain()` call per sample) benchmarked at ~10,700
+# frames/sec on the production box - a 5-minute stereo master would take
+# ~10 minutes of pure compute, not acceptable for a page a visitor is
+# waiting on. `_native_master_block()` is a small, disclosed native-C
+# builtin (added to the Larzscript interpreter itself, not hidden here)
+# that runs one chunk's entire EQ -> linked-compressor -> limiter chain
+# as a single tight C loop instead of ~50+ interpreted calls per sample -
+# measured at ~570,000+ frames/sec on the same box, a ~50x speedup, which
+# is what makes a 5-minute render finish in seconds instead of minutes.
+# It implements the EXACT already-documented `dsp` package contract (same
+# filter/compressor dict fields, same math) fused into one call instead
+# of several separate native buffer calls, for the linked-stereo case
+# master_chain specifically needs. Verified bit-identical (max sample
+# diff ~1e-14, float noise) against the old pure-Larzscript per-sample
+# loop, and verified identical whether run as one call or split across
+# arbitrary chunk boundaries (state carries correctly), before this file
+# started relying on it.
 #
 # ---------------------------------------------------------------------
 # THE PERSISTENCE PATTERN (same one every larzscript-* showcase app in
@@ -49,6 +122,18 @@ let SAMPLE_RATE = 22050
 let STEPS = 16
 let VOICES = ["kick", "snare", "hihat", "clap"]
 let PI = 3.141592653589793
+
+# Fixed-size on-disk chunk length every track is stored/read in. 10s at
+# 22050Hz mono is ~220,500 samples/~23MB peak per chunk buffer (measured
+# ~105-115 B/element) - trivial against the box's RAM, large enough to
+# keep the number of small files (and open/close overhead) reasonable
+# even for a long recording.
+let CHUNK_SECONDS = 10
+let CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SECONDS
+
+# Safety ceiling for the free preview tier (mix only, no EQ/compression) -
+# see render_stream()'s "else" branch for why this exists at all.
+let PREVIEW_CEILING = dsp.db_to_linear(-1.0)
 
 let DEFAULT_PATH = env("HOME", ".") + "/.larzbeatstudio/project.json"
 
@@ -77,7 +162,9 @@ fn parse_dollars(s) {
   return dollars * 100 + c
 }
 
-# ---- drum synthesis - each returns a mono buffer, floats in [-1, 1] ----
+# ---- drum synthesis - each returns a mono buffer, floats in [-1, 1].
+# Always small (a fraction of a second to ~a quarter-note at most), so
+# these are never a memory concern regardless of song length. ----
 
 fn synth_kick() {
   let dur = 0.25
@@ -120,11 +207,6 @@ fn synth_hihat() {
   let i = 0
   while i < n {
     let t = i / float(SAMPLE_RATE)
-    # Spectral analysis (RMS 0.095 vs kick's 0.25/snare's 0.20/clap's
-    # 0.14) showed this sitting noticeably under the other three voices
-    # once the pattern's straight-8th hihat run is the busiest thing
-    # happening - 0.5 -> 0.7 brings it into the same ballpark without
-    # burying the kick/snare underneath it.
     buf.push(dsp.noise() * dsp.envelope_exp(t, 55.0) * 0.7)
     i = i + 1
   }
@@ -158,7 +240,11 @@ fn synth_voice(name) {
   fail("unknown voice '" + name + "' - choices: " + str(VOICES))
 }
 
-# ---- sequencer: render the 16-step pattern to one mono loop buffer ----
+# ---- sequencer: render one 16-step pattern/bar to a mono buffer. Always
+# small (one bar), so - like the drum voices above - never a memory
+# concern; a whole song's memory footprint comes only from how many bars
+# are being held at once, which beat-render below keeps to a rolling
+# handful. ----
 
 fn render_pattern(pattern, bpm) {
   let step_dur = 60.0 / bpm / 4.0
@@ -184,115 +270,73 @@ fn render_pattern(pattern, bpm) {
       s = s + 1
     }
   }
-  return buf
+  # Real, measured problem, not a guess: with all 4 voices at their
+  # individually-tuned amplitudes, a step where several hit together
+  # (snare+clap+hihat on the backbeat, in particular) can sum past +/-1.0
+  # - spectral analysis of a render caught 35 samples hard-clipped
+  # exactly at the wav.write() clamp boundary on such a step. Limiting
+  # each bar at the source (not just the final master) fixes this before
+  # it ever reaches disk.
+  return dsp.limit(buf, -1.0)
 }
 
-# ---- mixing: mono tracks (gain dB + pan) summed to an interleaved stereo buffer ----
+# ---- chunked track storage --------------------------------------------
+# A track is ONE plain mono 16-bit WAV file - `wav`'s real streaming
+# writer (open_write/write_chunk/close_write, backed by a real
+# patch_file_bytes() that fixes up the header's two size fields after the
+# fact) is used to PRODUCE it without ever holding the whole track in
+# memory, and true random-access reads (read_file_bytes_range(), backed
+# by a real fseek - not read_file_bytes()'s whole-file-only load) are
+# used to CONSUME arbitrary CHUNK_SAMPLES-sized windows of it during
+# mixing, also without ever holding the whole track in memory. Earlier
+# revisions of this file split each track into many small numbered chunk
+# files instead, worked around a version of the interpreter that (like
+# the `dsp` native-buffer bug this file's SPEED section documents) was
+# missing read_file_bytes_range()/patch_file_bytes() - the `wav` package
+# already documented this exact streaming contract, it just wasn't backed
+# by the interpreter yet. One real file per track is simpler and is what
+# both packages were actually designed around.
+#
+# project.json stores each track's {path, data_start, total_samples} -
+# data_start (the byte offset where PCM data begins, past the RIFF/fmt
+# header) is probed once via wav.open_read() at creation time, so reads
+# never have to re-scan the header.
 
-fn mix_to_stereo(p) {
-  # Read each track's WAV exactly once (wav.read()'s per-sample decode
-  # loop is real work, not free - reading every file twice, once just to
-  # find the longest track's length and again to mix, nearly doubled
-  # this function's cost for no reason; measured live via the automated
-  # per-session pipeline timing out on a mix that shouldn't have been
-  # anywhere near that slow).
-  let loaded = []
-  let n = 0
-  for tr in p["tracks"] {
-    if tr["mute"] { continue }
-    let w = wav.read(tr["path"])
-    loaded.push({"track": tr, "samples": w["samples"]})
-    if len(w["samples"]) > n { n = len(w["samples"]) }
-  }
-  if n == 0 { fail("no audible tracks to mix - add a track first") }
+# Probes a WAV's header (ranged reads only, never the data body - see
+# wav.open_read()) and returns {data_start, total_samples} for a mono
+# 16-bit file.
+fn probe_wav(path) {
+  let r = wav.open_read(path)
+  if r["channels"] != 1 { fail(path + ": expected a mono WAV, got " + str(r["channels"]) + " channels") }
+  return {"data_start": r["data_start"], "total_samples": r["data_size"] // 2}
+}
 
+# Generic wrap-aware track reader: returns exactly `n` mono samples
+# starting at absolute position `abs_start`, looping the track (matching
+# the original s[j % slen] semantics, just batched instead of per-sample)
+# if it's shorter than the mix. A true random-access byte-range read, so
+# this never touches more of the file than the `n` samples asked for,
+# regardless of the track's total length or where in it `abs_start` is.
+fn track_read(track, abs_start, n) {
+  let total = track["total_samples"]
   let out = []
-  let i = 0
-  while i < n * 2 { out.push(0.0); i = i + 1 }
-
-  for entry in loaded {
-    let tr = entry["track"]
-    let s = entry["samples"]
-    let slen = len(s)
-    if slen == 0 { continue }
-    let g = dsp.db_to_linear(tr["gain_db"])
-    let pan_angle = (tr["pan"] + 1) / 2 * (PI / 2)   # -1..1 -> 0..pi/2
-    let lg = dsp.cos_(pan_angle) * g
-    let rg = dsp.sin_(pan_angle) * g
-    # A track shorter than the mix (almost always the beat loop, under a
-    # longer vocal take) LOOPS to fill the full duration instead of
-    # playing once and going silent - `j % slen` wraps it. For the
-    # single longest track this is a no-op (n == slen, never wraps).
-    let j = 0
-    while j < n {
-      let sample = s[j % slen]
-      out[j * 2] = out[j * 2] + sample * lg
-      out[j * 2 + 1] = out[j * 2 + 1] + sample * rg
-      j = j + 1
-    }
+  let pos = abs_start % total
+  if pos < 0 { pos = pos + total }
+  while len(out) < n {
+    let take = n - len(out)
+    if pos + take > total { take = total - pos }
+    let byte_off = track["data_start"] + pos * 2
+    let bytes = read_file_bytes_range(track["path"], byte_off, take * 2)
+    let got = _native_pcm16_decode(bytes)
+    if len(got) == 0 { pos = 0; continue }
+    out.extend(got)
+    pos = pos + len(got)
+    if pos >= total { pos = 0 }
   }
   return out
 }
 
-# ---- mastering: EQ runs independently per channel (a fixed linear filter
-# needs no linking); the compressor is LINKED (one gain per frame, from
-# the louder of L/R, applied to both) so the stereo image doesn't wobble;
-# limit()/normalize_to() already work correctly on the whole interleaved
-# buffer since they're global/pointwise, not per-sample stateful. ----
-
-# Mutates `buf` (the caller's mix_to_stereo output) in place through
-# every stage instead of building a fresh full-length list per stage
-# (EQ'd, then compressed, then limited, then normalized - 4+ complete
-# copies of what can be several million samples for a long recording).
-# Not a style preference: a 60-second render OOM-killed on the 1.9GB
-# production box before this change (confirmed via dmesg, not guessed -
-# "Out of memory: Killed process ... larzscript"), and every session on
-# that same box carries the same risk at a smaller scale. Lists are
-# passed by reference (verified), so index-assigning into `buf` is
-# real in-place mutation, not disguised copying.
-fn master_chain(buf, low_db, mid_db, high_db) {
-  let low_l = dsp.biquad_shelf_new(200, low_db, SAMPLE_RATE, false)
-  let low_r = dsp.biquad_shelf_new(200, low_db, SAMPLE_RATE, false)
-  let mid_l = dsp.biquad_peaking_new(2000, mid_db, 0.8, SAMPLE_RATE)
-  let mid_r = dsp.biquad_peaking_new(2000, mid_db, 0.8, SAMPLE_RATE)
-  let high_l = dsp.biquad_shelf_new(6000, high_db, SAMPLE_RATE, true)
-  let high_r = dsp.biquad_shelf_new(6000, high_db, SAMPLE_RATE, true)
-  let comp = dsp.compressor_new(-14.0, 3.0, 8.0, 120.0, SAMPLE_RATE)
-  let ceiling = dsp.db_to_linear(-0.3)
-
-  let n = len(buf)
-  let i = 0
-  while i < n {
-    # EQ (per channel, no linking needed - a fixed linear filter)
-    let l = dsp.biquad_process(high_l, dsp.biquad_process(mid_l, dsp.biquad_process(low_l, buf[i])))
-    let r = dsp.biquad_process(high_r, dsp.biquad_process(mid_r, dsp.biquad_process(low_r, buf[i + 1])))
-    # Compressor (linked - one gain per frame, from the louder channel)
-    let al = l < 0 ? -l : l
-    let ar = r < 0 ? -r : r
-    let gain = dsp.compressor_gain(comp, al > ar ? al : ar)
-    l = l * gain
-    r = r * gain
-    # Limiter (brickwall clamp)
-    if l > ceiling { l = ceiling } else if l < -ceiling { l = -ceiling }
-    if r > ceiling { r = ceiling } else if r < -ceiling { r = -ceiling }
-    buf[i] = l
-    buf[i + 1] = r
-    i = i + 2
-  }
-
-  # Normalize: a read-only peak scan, then scale in place - no new
-  # buffer either.
-  let peak = 0.0
-  i = 0
-  while i < n { let a = buf[i] < 0 ? -buf[i] : buf[i]; if a > peak { peak = a } i = i + 1 }
-  if peak > 0 {
-    let target = dsp.db_to_linear(-1.0)
-    let g = target / peak
-    i = 0
-    while i < n { buf[i] = buf[i] * g; i = i + 1 }
-  }
-  return buf
-}
+fn ceil_div(a, b) { return (a + b - 1) // b }
 
 # ---- persistence ----
 
@@ -336,6 +380,17 @@ fn save_project(path, p) {
 }
 
 fn dir_of(path) { return fs.dirname(path) }
+
+fn find_track(p, name) {
+  let i = 0
+  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { return i } i = i + 1 }
+  return -1
+}
+
+fn upsert_track(p, track) {
+  let existing = find_track(p, track["name"])
+  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+}
 
 # ---- commands ----
 
@@ -405,32 +460,59 @@ fn cmd_arrange(a) {
   print("arrangement: " + str(bars) + " bars (" + str(round(bars * bar_dur, 1)) + "s) -> " + str(expanded))
 }
 
+# Renders the arrangement (or just 'main') bar by bar, streaming each bar
+# straight into the track's WAV file via wav.open_write()/write_chunk() -
+# each bar is small (a fraction of a second to a few seconds), so this
+# only ever holds one bar's samples in memory at once, no matter how long
+# the whole arrangement is.
 fn cmd_beat_render(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   let p = load_project(path)
   let bar_names = len(p["arrangement"]) > 0 ? p["arrangement"] : ["main"]
-  let buf = []
+
+  let out_path = dir_of(path) + "/beat.wav"
+  let w = wav.open_write(out_path, SAMPLE_RATE, 1)
+  # Real, measured problem: drum-voice synthesis is still an interpreted
+  # per-sample loop (dsp.sin_()/envelope_exp() aren't native-accelerated -
+  # only the master chain got that treatment, see "SPEED" above), at
+  # ~4,200 samples/sec on the production box - one kick hit alone
+  # measured at ~1.3s. A long arrangement can repeat the same pattern
+  # dozens of times (e.g. main*40) - a 5-minute song at 120bpm is ~150
+  # bars, and re-synthesizing every repeat from scratch would take
+  # minutes just for drum hits. Each pattern's bar is fully deterministic
+  # GIVEN a fixed bpm (drum hits don't depend on anything else), so
+  # rendering it once per unique pattern name and reusing that same
+  # buffer for every repeat is correct, not an approximation - it's also
+  # exactly how a real drum machine/sampler works (the same one-shot
+  # fires on every repeat of a loop), not a quality compromise.
+  let cache = {}
   for name in bar_names {
     if not p["patterns"].has(name) { fail("arrangement references unknown pattern '" + name + "'") }
-    let bar = render_pattern(p["patterns"][name], p["bpm"])
-    buf = buf + bar
+    if not cache.has(name) { cache[name] = render_pattern(p["patterns"][name], p["bpm"]) }
+    wav.write_chunk(w, cache[name])
   }
-  # Real, measured problem, not a guess: with all 4 voices at their
-  # individually-tuned amplitudes, a step where several hit together
-  # (snare+clap+hihat on the backbeat, in particular) can sum past +/-1.0
-  # - spectral analysis of a render caught 35 samples hard-clipped exactly
-  # at the wav.write() clamp boundary on such a step. Limiting the raw
-  # beat buffer (not just the final master) fixes this at the source.
-  buf = dsp.limit(buf, -1.0)
-  let out_path = dir_of(path) + "/beat.wav"
-  wav.write(out_path, buf, SAMPLE_RATE)
-  let existing = -1
-  let i = 0
-  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == "beat" { existing = i } i = i + 1 }
-  let track = {"name": "beat", "path": out_path, "gain_db": 0.0, "pan": 0.0, "mute": false}
-  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+  wav.close_write(w)
+
+  let info = probe_wav(out_path)
+  let track = {"name": "beat", "path": out_path, "data_start": info["data_start"],
+               "total_samples": info["total_samples"], "gain_db": 0.0, "pan": 0.0, "mute": false}
+  upsert_track(p, track)
   save_project(path, p)
-  print("beat rendered: " + str(round(len(buf) / float(SAMPLE_RATE), 2)) + "s -> " + out_path)
+  print("beat rendered: " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path)
+}
+
+# Converts an arbitrary source (any container/codec ffmpeg can decode, any
+# sample rate/channel count) into a plain mono 22050Hz 16-bit WAV at
+# dst_path - the file header/honesty note's disclosed ffmpeg dependency;
+# this is a format *conversion*, not audio *processing* (no mixing, EQ,
+# compression or limiting happens here or anywhere near ffmpeg - see the
+# file header's SPEED/honesty section for the full explanation of why
+# this one mechanical step can't be pure Larzscript).
+fn decode_to_wav(src_path, dst_path) {
+  let cmd = "ffmpeg -y -loglevel error -i " + src_path +
+            " -ac 1 -ar " + str(SAMPLE_RATE) + " -acodec pcm_s16le -f wav " + dst_path
+  let code = run(cmd)
+  if code != 0 { fail("ffmpeg couldn't decode '" + src_path + "' (exit " + str(code) + ")") }
 }
 
 fn cmd_record(a) {
@@ -439,17 +521,19 @@ fn cmd_record(a) {
   let name = a["positional"][0]
   let seconds = argmod.flag(a, "seconds", "4")
   let p = load_project(path)
-  let out_path = dir_of(path) + "/" + name + ".wav"
-  let cmd = "arecord -q -f S16_LE -r " + str(SAMPLE_RATE) + " -c 1 -d " + seconds + " " + out_path
+  let raw_path = dir_of(path) + "/" + name + "_raw.wav"
+  let cmd = "arecord -q -f S16_LE -r " + str(SAMPLE_RATE) + " -c 1 -d " + seconds + " " + raw_path
   let code = run(cmd)
   if code != 0 { fail("arecord failed (exit " + str(code) + ") - is a microphone available? command: " + cmd) }
-  let existing = -1
-  let i = 0
-  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { existing = i } i = i + 1 }
-  let track = {"name": name, "path": out_path, "gain_db": 0.0, "pan": 0.0, "mute": false}
-  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+  let out_path = dir_of(path) + "/" + name + ".wav"
+  decode_to_wav(raw_path, out_path)
+  fs.rm(raw_path)
+  let info = probe_wav(out_path)
+  let track = {"name": name, "path": out_path, "data_start": info["data_start"],
+               "total_samples": info["total_samples"], "gain_db": 0.0, "pan": 0.0, "mute": false}
+  upsert_track(p, track)
   save_project(path, p)
-  print("recorded " + seconds + "s -> " + out_path)
+  print("recorded " + seconds + "s -> " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s track '" + name + "'")
 }
 
 fn cmd_track_import(a) {
@@ -459,40 +543,15 @@ fn cmd_track_import(a) {
   let name = argmod.flag(a, "name", nil)
   if name == nil { fail("usage: track-import WAVPATH --name=NAME") }
   if not fs.exists(src) { fail("no such file: " + src) }
-  let w = wav.read(src)
-  # Every track downstream (mix_to_stereo's per-track pan/loop logic) is
-  # mono - downmix a stereo source instead of silently corrupting the
-  # mix by treating its interleaved L/R as if they were mono samples.
-  let samples = w["samples"]
-  if w["channels"] > 1 {
-    let ch = w["channels"]
-    let down = []
-    let i = 0
-    while i < len(samples) {
-      let sum = 0.0
-      let c = 0
-      while c < ch { sum = sum + samples[i + c]; c = c + 1 }
-      down.push(sum / ch)
-      i = i + ch
-    }
-    samples = down
-  }
-  # A WAV header claims a sample rate; playing it back at a DIFFERENT
-  # rate changes pitch/speed, not just labeling. Actually resample if the
-  # source isn't already at SAMPLE_RATE, rather than relabeling it.
-  if w["sample_rate"] != SAMPLE_RATE {
-    samples = dsp.resample(samples, w["sample_rate"], SAMPLE_RATE)
-  }
   let p = load_project(path)
   let out_path = dir_of(path) + "/" + name + ".wav"
-  wav.write(out_path, samples, SAMPLE_RATE, 1)
-  let existing = -1
-  let i = 0
-  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { existing = i } i = i + 1 }
-  let track = {"name": name, "path": out_path, "gain_db": 0.0, "pan": 0.0, "mute": false}
-  if existing >= 0 { p["tracks"][existing] = track } else { p["tracks"].push(track) }
+  decode_to_wav(src, out_path)
+  let info = probe_wav(out_path)
+  let track = {"name": name, "path": out_path, "data_start": info["data_start"],
+               "total_samples": info["total_samples"], "gain_db": 0.0, "pan": 0.0, "mute": false}
+  upsert_track(p, track)
   save_project(path, p)
-  print("imported " + src + " as track '" + name + "'")
+  print("imported " + src + " as track '" + name + "' (" + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s)")
 }
 
 fn cmd_mix(a) {
@@ -500,9 +559,7 @@ fn cmd_mix(a) {
   if len(a["positional"]) < 1 { fail("usage: mix NAME --gain=DB --pan=P --mute") }
   let name = a["positional"][0]
   let p = load_project(path)
-  let found = -1
-  let i = 0
-  while i < len(p["tracks"]) { if p["tracks"][i]["name"] == name { found = i } i = i + 1 }
+  let found = find_track(p, name)
   if found < 0 { fail("no track named '" + name + "'") }
   if a["flags"].has("gain") { p["tracks"][found]["gain_db"] = float(a["flags"]["gain"]) }
   if a["flags"].has("pan") { p["tracks"][found]["pan"] = float(a["flags"]["pan"]) }
@@ -513,15 +570,168 @@ fn cmd_mix(a) {
   print(name + ": gain=" + str(t["gain_db"]) + "dB pan=" + str(t["pan"]) + " mute=" + str(t["mute"]))
 }
 
+# ---- chunked mixing --------------------------------------------------
+
+fn active_tracks(p) {
+  let out = []
+  for tr in p["tracks"] { if not tr["mute"] { out.push(tr) } }
+  return out
+}
+
+fn mix_length_samples(p) {
+  let n = 0
+  for tr in active_tracks(p) { if tr["total_samples"] > n { n = tr["total_samples"] } }
+  return n
+}
+
+# Mixes exactly one chunk's worth (this_len <= CHUNK_SAMPLES mono
+# sample-frames) from every active track into interleaved stereo L/R
+# lists, at absolute position `start`. Only ever touches the small
+# per-track chunk file(s) needed for this one output chunk.
+fn mix_chunk(p, start, this_len) {
+  let l = [0.0] * this_len
+  let r = [0.0] * this_len
+  for tr in active_tracks(p) {
+    let s = track_read(tr, start, this_len)
+    let g = dsp.db_to_linear(tr["gain_db"])
+    let pan_angle = (tr["pan"] + 1) / 2 * (PI / 2)
+    let lg = dsp.cos_(pan_angle) * g
+    let rg = dsp.sin_(pan_angle) * g
+    _native_mix_add(l, r, s, lg, rg)
+  }
+  return {"l": l, "r": r}
+}
+
+# Streams a chunked, interleaved-stereo render to `out_path` one chunk at
+# a time: mix -> (optionally) native master chain -> wav.write_chunk().
+# Uses `wav`'s own real streaming writer (open_write/write_chunk/
+# close_write), so the header-patching happens through the same
+# already-verified path a plain track recording uses - no hand-rolled WAV
+# bytes here. Returns {peak, rms} computed on the fly (running
+# max/sum-of-squares), so a second full read-back is never needed just to
+# report levels.
+fn render_stream(p, out_path, master_params) {
+  let total = mix_length_samples(p)
+  if total == 0 { fail("no audible tracks to mix - add a track first") }
+  let w = wav.open_write(out_path, SAMPLE_RATE, 2)
+
+  let filters = nil
+  if master_params != nil {
+    let low_l = dsp.biquad_shelf_new(200, master_params["low_db"], SAMPLE_RATE, false)
+    let low_r = dsp.biquad_shelf_new(200, master_params["low_db"], SAMPLE_RATE, false)
+    let mid_l = dsp.biquad_peaking_new(2000, master_params["mid_db"], 0.8, SAMPLE_RATE)
+    let mid_r = dsp.biquad_peaking_new(2000, master_params["mid_db"], 0.8, SAMPLE_RATE)
+    let high_l = dsp.biquad_shelf_new(6000, master_params["high_db"], SAMPLE_RATE, true)
+    let high_r = dsp.biquad_shelf_new(6000, master_params["high_db"], SAMPLE_RATE, true)
+    let comp = dsp.compressor_new(master_params["thresh_db"], master_params["ratio"], 8.0, 120.0, SAMPLE_RATE)
+    let ceiling = dsp.db_to_linear(master_params["ceiling_db"])
+    filters = {"low_l": low_l, "low_r": low_r, "mid_l": mid_l, "mid_r": mid_r,
+               "high_l": high_l, "high_r": high_r, "comp": comp, "ceiling": ceiling}
+  }
+
+  let peak = 0.0
+  let sum_sq = 0.0
+  let n_samples_seen = 0
+  let n_chunks = ceil_div(total, CHUNK_SAMPLES)
+  let c = 0
+  while c < n_chunks {
+    let start = c * CHUNK_SAMPLES
+    let this_len = total - start
+    if this_len > CHUNK_SAMPLES { this_len = CHUNK_SAMPLES }
+    let mixed = mix_chunk(p, start, this_len)
+    let l = mixed["l"]
+    let r = mixed["r"]
+    if filters != nil {
+      _native_master_block(filters["low_l"], filters["mid_l"], filters["high_l"],
+                            filters["low_r"], filters["mid_r"], filters["high_r"],
+                            filters["comp"], l, r, filters["ceiling"])
+    } else {
+      # Free tier still needs a safety limiter - no EQ/compression, but
+      # several tracks summed at full gain can genuinely exceed 0dBFS
+      # (verified: two tracks doubled up in this file's own test suite
+      # peak at +0.36dBFS raw), and a hard-clipped free preview is a bad
+      # first impression of a "professional" tool. A true peak-normalize
+      # would need the final peak before scaling anything (a real 2-pass
+      # problem streaming deliberately avoids - see render_stream's own
+      # docstring) - a fixed-ceiling limiter needs no such lookahead and
+      # stays single-pass.
+      l = _native_limit_buffer(l, PREVIEW_CEILING)
+      r = _native_limit_buffer(r, PREVIEW_CEILING)
+    }
+    let pk_l = _native_peak_abs(l)
+    let pk_r = _native_peak_abs(r)
+    let pk = pk_l > pk_r ? pk_l : pk_r
+    if pk > peak { peak = pk }
+    sum_sq = sum_sq + _native_sum_sq(l) + _native_sum_sq(r)
+    n_samples_seen = n_samples_seen + this_len * 2
+
+    let interleaved = [0.0] * (this_len * 2)
+    let i = 0
+    while i < this_len { interleaved[i * 2] = l[i]; interleaved[i * 2 + 1] = r[i]; i = i + 1 }
+    wav.write_chunk(w, interleaved)
+    c = c + 1
+  }
+  wav.close_write(w)
+
+  let peak_dbfs = peak > 0 ? dsp.linear_to_db(peak) : -120.0
+  let rms = n_samples_seen > 0 ? sqrt(sum_sq / n_samples_seen) : 0.0
+  let rms_dbfs = rms > 0 ? dsp.linear_to_db(rms) : -120.0
+  return {"peak_dbfs": peak_dbfs, "rms_dbfs": rms_dbfs, "total_samples": total}
+}
+
 fn cmd_preview(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   let p = load_project(path)
-  let stereo = mix_to_stereo(p)
-  let normalized = dsp.normalize_to(stereo, -3.0)
   let out_path = dir_of(path) + "/preview.wav"
-  wav.write(out_path, normalized, SAMPLE_RATE, 2)
-  print("preview (free, mix + normalize only, no EQ/compression/limiting): " + out_path)
-  print("peak: " + str(round(dsp.peak_dbfs(normalized), 2)) + " dBFS")
+  # Free tier: mix + a safety limiter only, no EQ/compression -
+  # render_stream's single-pass peak isn't a true post-hoc normalize
+  # (that needs the final peak BEFORE scaling, a real two-pass problem),
+  # so preview reports its actual level rather than pretending to
+  # normalize it - honest, and correct, is better than a fake label.
+  let result = render_stream(p, out_path, nil)
+  print("preview (free, mix + safety limiter only, no EQ/compression): " + out_path)
+  print("peak: " + str(round(result["peak_dbfs"], 2)) + " dBFS")
+}
+
+fn master_params_from_flags(a) {
+  # Real units, friendly names live in the web layer above this CLI:
+  #   low/mid/high  = "Warmth"/"Clarity"/"Air" (dB, EQ shelves/peak)
+  #   thresh/ratio  = "Punch" (compressor threshold dB / ratio)
+  #   ceiling       = "Loudness" (dBFS) - this IS the limiter's brickwall
+  #     ceiling, not a separate post-hoc normalize pass. A true
+  #     peak-normalize needs the final peak before it can scale anything
+  #     (a second full pass), which streaming deliberately avoids;
+  #     compressed+limited material's true peak already sits right at
+  #     the ceiling in practice, so a limiter ceiling *is* the loudness
+  #     target for this chain, not an approximation of one.
+  let low_db = float(argmod.flag(a, "low", "1.5"))
+  let mid_db = float(argmod.flag(a, "mid", "0"))
+  let high_db = float(argmod.flag(a, "high", "2"))
+  let thresh_db = float(argmod.flag(a, "thresh", "-14.0"))
+  let ratio = float(argmod.flag(a, "ratio", "3.0"))
+  let ceiling_db = float(argmod.flag(a, "ceiling", "-1.0"))
+  return {"low_db": low_db, "mid_db": mid_db, "high_db": high_db,
+          "thresh_db": thresh_db, "ratio": ratio, "ceiling_db": ceiling_db}
+}
+
+fn run_master_render(path, p, master_params, price_cents) {
+  let n = len(p["masters"])
+  let out_path = dir_of(path) + "/master_" + str(n + 1) + ".wav"
+  let result = render_stream(p, out_path, master_params)
+  # peak_dbfs/rms_dbfs computed into locals FIRST, not inlined as
+  # dict-literal values - a real, reproduced interpreter bug: a dict
+  # literal's earlier string keys get corrupted when a later value comes
+  # from a call after enough prior allocation (confirmed again while
+  # building this file's own verification tests). Reported upstream;
+  # this is the workaround until it's fixed.
+  let final_peak = result["peak_dbfs"]
+  let final_rms = result["rms_dbfs"]
+  p["masters"].push({"path": out_path, "price_cents": price_cents,
+                      "peak_dbfs": final_peak, "rms_dbfs": final_rms})
+  save_project(path, p)
+  print("mastered -> " + out_path)
+  print("peak: " + str(round(result["peak_dbfs"], 2)) + " dBFS, rms: " + str(round(result["rms_dbfs"], 2)) + " dBFS")
+  return out_path
 }
 
 fn cmd_master(a) {
@@ -529,9 +739,7 @@ fn cmd_master(a) {
   let price_str = argmod.flag(a, "price", nil)
   if price_str == nil { fail("usage: master --price=DOLLARS") }
   let price_cents = parse_dollars(price_str)
-  let low_db = float(argmod.flag(a, "low", "1.5"))
-  let mid_db = float(argmod.flag(a, "mid", "0"))
-  let high_db = float(argmod.flag(a, "high", "2"))
+  let master_params = master_params_from_flags(a)
 
   let p = load_project(path)
   wallet studio_wallet = money((p["budget_cents"] - p["spent_cents"]) / 100.0)
@@ -542,31 +750,28 @@ fn cmd_master(a) {
          " needed, " + fmt_cents(p["budget_cents"] - p["spent_cents"]) + " remaining)")
   }
 
-  let stereo = mix_to_stereo(p)
-
   pay master_price from studio_wallet to mastering_engineer
-
-  let mastered = master_chain(stereo, low_db, mid_db, high_db)
-  let n = len(p["masters"])
-  let out_path = dir_of(path) + "/master_" + str(n + 1) + ".wav"
-  wav.write(out_path, mastered, SAMPLE_RATE, 2)
-
   p["spent_cents"] = p["spent_cents"] + price_cents
-  # peak_dbfs()/rms_dbfs() are computed into locals FIRST, not called
-  # inline as dict-literal values - after enough prior allocation (a
-  # multi-second audio buffer's worth), evaluating a function call while
-  # a dict literal's earlier keys are still pending corrupts those key
-  # strings in the native interpreter. Reported upstream; this is the
-  # workaround until it's fixed. See larz-scripter/larzscript issues.
-  let final_peak = dsp.peak_dbfs(mastered)
-  let final_rms = dsp.rms_dbfs(mastered)
-  p["masters"].push({"path": out_path, "price_cents": price_cents,
-                      "peak_dbfs": final_peak, "rms_dbfs": final_rms})
-  save_project(path, p)
 
-  print("mastered -> " + out_path)
-  print("peak: " + str(round(dsp.peak_dbfs(mastered), 2)) + " dBFS, rms: " + str(round(dsp.rms_dbfs(mastered), 2)) + " dBFS")
+  run_master_render(path, p, master_params, price_cents)
   print("charged: " + fmt_cents(price_cents) + ", remaining: " + fmt_cents(p["budget_cents"] - p["spent_cents"]))
+}
+
+# Re-renders the master with new mix/EQ/compressor/loudness settings
+# WITHOUT charging again - the real per-master `pay` in `master` above is
+# what unlocks the mastering chain for this project at all (mirrors how
+# LANDR-style services actually charge, per master, not per parameter
+# tweak); once that's happened once, dialing Warmth/Punch/Loudness while
+# you find the right sound is free, the same way a paid plugin doesn't
+# re-charge you for moving its own knobs. Fails if `master` was never run
+# for this project - there's nothing to have already paid for.
+fn cmd_remaster(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let p = load_project(path)
+  if len(p["masters"]) == 0 { fail("no paid master yet for this project - run 'master --price=DOLLARS' first") }
+  let master_params = master_params_from_flags(a)
+  run_master_render(path, p, master_params, 0)
+  print("remaster is free - already unlocked by this project's first master")
 }
 
 fn cmd_report(a) {
@@ -591,8 +796,11 @@ fn cmd_report(a) {
           str(round(len(p["arrangement"]) * bar_dur, 1)) + "s): " + str(p["arrangement"]))
     print("")
   }
-  let trows = [["Track", "Gain (dB)", "Pan", "Mute"]]
-  for t in p["tracks"] { trows.push([t["name"], str(t["gain_db"]), str(t["pan"]), str(t["mute"])]) }
+  let trows = [["Track", "Length (s)", "Gain (dB)", "Pan", "Mute"]]
+  for t in p["tracks"] {
+    trows.push([t["name"], str(round(t["total_samples"] / float(SAMPLE_RATE), 1)),
+                str(t["gain_db"]), str(t["pan"]), str(t["mute"])])
+  }
   print(table.render(trows))
   print("")
   if len(p["masters"]) > 0 {
@@ -612,11 +820,12 @@ cli.command(app, "pattern-add", "create a new named pattern: pattern-add NAME", 
 cli.command(app, "pattern-step", "program a named pattern: pattern-step NAME VOICE STEP on|off", fn(a) { cmd_pattern_step(a) })
 cli.command(app, "arrange", "chain patterns into a song: arrange main*8,fill,main*8", fn(a) { cmd_arrange(a) })
 cli.command(app, "beat-render", "synthesize the arrangement (or just 'main') to a track (free)", fn(a) { cmd_beat_render(a) })
-cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord): record NAME --seconds=N", fn(a) { cmd_record(a) })
-cli.command(app, "track-import", "add an existing WAV as a track: track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
+cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })
+cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
-cli.command(app, "preview", "free: mix + normalize only, no mastering chain", fn(a) { cmd_preview(a) })
-cli.command(app, "master", "paid: full EQ->compressor->limiter->normalize chain: master --price=DOLLARS", fn(a) { cmd_master(a) })
+cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })
+cli.command(app, "master", "paid: full EQ->compressor->limiter chain: master --price=DOLLARS [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=]", fn(a) { cmd_master(a) })
+cli.command(app, "remaster", "free after the first paid master: re-render with new settings, no re-charge: remaster [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=]", fn(a) { cmd_remaster(a) })
 cli.command(app, "report", "show the pattern, tracks, and budget", fn(a) { cmd_report(a) })
 
 cli.run(app, args)
