@@ -1,8 +1,17 @@
 """beatstudio processing worker - run via cron every minute.
-Picks up any session with status "uploaded", converts the recorded vocal
-to WAV, runs it through the real larzscript beatstudio.lz pipeline
-(track-import -> mix -> preview -> master), and drops the results where
-Apache serves them as static files.
+
+Two job types, distinguished by session status:
+  "uploaded"            -> full pipeline: decode -> init project -> beat-render
+                           -> track-import vocal -> mix (default levels) ->
+                           preview -> master (PAID, first time only).
+  "rerender_requested"  -> lighter job: mix (new gain/pan/mute) -> preview ->
+                           remaster (FREE - beatstudio.lz only charges the
+                           wallet once per project, see beatstudio.lz's
+                           `master`/`remaster` commands) with new EQ/
+                           compressor/loudness settings. Reuses the beat/
+                           vocal tracks already rendered by the first pass -
+                           no re-decode, no re-synthesis.
+Both drop results where Apache serves them as static files.
 """
 import fcntl
 import json
@@ -20,12 +29,10 @@ LOCK_PATH = "/opt/beatstudio/.process.lock"
 
 # Same bpm/patterns as the demo beat on the page, so vocals line up with
 # what the visitor heard while recording. An 8-bar arrangement (intro ->
-# main groove x4 -> fill -> main), not one bar looped identically -
-# real dynamics, and it costs almost nothing extra: mix_to_stereo loops
-# whichever track is SHORTER to match the longer one, so the master's
-# render time is governed by the vocal's length (up to 30s), not the
-# beat pattern's own length - only beat-render itself (~2s/bar) scales
-# with bar count, and 8 bars is still a few seconds.
+# main groove x4 -> fill -> main), not one bar looped identically - real
+# dynamics. Bar-level pattern editing isn't exposed on the page (yet) -
+# this pass exposes the mixer (per-track gain/pan/mute) and the full
+# master chain (EQ/compressor/loudness) as real controls instead.
 BPM = "140"
 MAIN_STEPS = [
     ("kick", 0), ("kick", 6), ("kick", 8), ("kick", 11),
@@ -47,6 +54,16 @@ NAMED_STEPS = [
 ]
 ARRANGEMENT = "intro*2,main*4,fill,main"
 
+DEFAULT_PARAMS = {
+    "tracks": {
+        "beat": {"gain": -1.0, "pan": 0.0, "mute": False},
+        "vocal": {"gain": 2.0, "pan": 0.0, "mute": False},
+    },
+    "master": {"low": 2.0, "mid": 0.5, "high": 3.0, "thresh": -14.0, "ratio": 3.0, "ceiling": -1.0},
+}
+
+MASTER_PRICE = "2"
+
 
 def write_status(d, status, **extra):
     payload = {"status": status, "updated_at": time.time()}
@@ -62,7 +79,77 @@ def run(cmd, timeout=180, **kw):
                            universal_newlines=True, timeout=timeout, **kw)
 
 
-def process_session(session_id, d):
+def load_params(d):
+    path = os.path.join(d, "params.json")
+    if not os.path.exists(path):
+        return DEFAULT_PARAMS
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return DEFAULT_PARAMS
+
+
+def apply_mix(project, params, log_prefix, d):
+    """Sets both tracks' gain/pan/mute from params. Returns the failed
+    CompletedProcess on error, or None on success - callers write_status
+    and return themselves so a partial mix state never gets reported as
+    "done"."""
+    for name in ("beat", "vocal"):
+        t = params["tracks"][name]
+        mute_flag = "--mute=true" if t["mute"] else "--unmute"
+        p = run(BEATSTUDIO + ["mix", name, "--gain=" + str(t["gain"]), "--pan=" + str(t["pan"]),
+                               mute_flag, "--file=" + project])
+        if p.returncode != 0:
+            write_status(d, "error", message=log_prefix + ": couldn't set '" + name + "' mix", detail=p.stdout[-800:])
+            return p
+    return None
+
+
+def render_preview_and_master(project, params, d, is_first_master):
+    p = run(BEATSTUDIO + ["preview", "--file=" + project], timeout=300)
+    if p.returncode != 0:
+        write_status(d, "error", message="preview mix failed", detail=p.stdout[-800:])
+        return False
+
+    m = params["master"]
+    master_flags = ["--low=" + str(m["low"]), "--mid=" + str(m["mid"]), "--high=" + str(m["high"]),
+                     "--thresh=" + str(m["thresh"]), "--ratio=" + str(m["ratio"]), "--ceiling=" + str(m["ceiling"])]
+    if is_first_master:
+        cmd = BEATSTUDIO + ["master", "--price=" + MASTER_PRICE] + master_flags + ["--file=" + project]
+    else:
+        cmd = BEATSTUDIO + ["remaster"] + master_flags + ["--file=" + project]
+    # A real full-chain render (5+ minutes of audio through native EQ/
+    # compressor/limiter) measured ~30-50s on this box at 5-8 minutes -
+    # generous on purpose, the same lesson the original timeout already
+    # learned once (a too-tight timeout throwing away a render that was
+    # seconds from finishing is worse than waiting).
+    p = run(cmd, timeout=600)
+    if p.returncode != 0:
+        write_status(d, "error", message="mastering failed", detail=p.stdout[-800:])
+        return False
+    return True
+
+
+def publish_results(project, d, session_id):
+    out_dir = os.path.join(RESULTS_DIR, session_id)
+    os.makedirs(out_dir, exist_ok=True)
+    proj = json.load(open(project))
+    masters = proj.get("masters", [])
+    if not masters:
+        write_status(d, "error", message="no master was produced")
+        return
+    last_master_path = masters[-1]["path"]
+    shutil.copyfile(os.path.join(d, "preview.wav"), os.path.join(out_dir, "before.wav"))
+    shutil.copyfile(last_master_path, os.path.join(out_dir, "after.wav"))
+    os.chmod(os.path.join(out_dir, "before.wav"), 0o644)
+    os.chmod(os.path.join(out_dir, "after.wav"), 0o644)
+    write_status(d, "done", before_url="/beatstudio/results/" + session_id + "/before.wav",
+                 after_url="/beatstudio/results/" + session_id + "/after.wav",
+                 peak_dbfs=masters[-1]["peak_dbfs"])
+
+
+def process_uploaded(session_id, d):
     status_path = os.path.join(d, "status.json")
     with open(status_path) as f:
         st = json.load(f)
@@ -74,10 +161,11 @@ def process_session(session_id, d):
 
     write_status(d, "processing")
 
-    vocal_wav = os.path.join(d, "vocal.wav")
-    p = run(["ffmpeg", "-y", "-i", raw_path, "-ac", "1", "-ar", "22050", "-acodec", "pcm_s16le", vocal_wav])
+    vocal_wav = os.path.join(d, "vocal_upload.wav")
+    p = run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw_path, "-ac", "1", "-ar", "22050",
+             "-acodec", "pcm_s16le", vocal_wav])
     if p.returncode != 0 or not os.path.exists(vocal_wav):
-        write_status(d, "error", message="couldn't decode the recording", detail=p.stdout[-800:])
+        write_status(d, "error", message="couldn't decode the recording", detail=p.stdout[-800:] if p.stdout else "")
         return
 
     project = os.path.join(d, "project.json")
@@ -95,43 +183,36 @@ def process_session(session_id, d):
         write_status(d, "error", message="arrangement failed", detail=p.stdout[-800:])
         return
 
-    p = run(BEATSTUDIO + ["beat-render", "--file=" + project])
+    p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
     if p.returncode != 0:
         write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
         return
 
-    p = run(BEATSTUDIO + ["track-import", vocal_wav, "--name=vocal", "--file=" + project])
+    p = run(BEATSTUDIO + ["track-import", vocal_wav, "--name=vocal", "--file=" + project], timeout=300)
     if p.returncode != 0:
         write_status(d, "error", message="couldn't add your recording as a track", detail=p.stdout[-800:])
         return
 
-    run(BEATSTUDIO + ["mix", "beat", "--gain=-1", "--file=" + project])
-    run(BEATSTUDIO + ["mix", "vocal", "--gain=2", "--file=" + project])
-
-    # preview/master cost scales with how long the recording is (up to
-    # the page's own 30s cap) - measured live (see commit message): a
-    # ~120s timeout was too tight even for an 8-bar beat + 6s vocal once
-    # under real load, and a false "timed out" here throws away a render
-    # that was seconds from finishing. Generous on purpose.
-    p = run(BEATSTUDIO + ["preview", "--file=" + project], timeout=300)
-    if p.returncode != 0:
-        write_status(d, "error", message="preview mix failed", detail=p.stdout[-800:])
+    params = DEFAULT_PARAMS
+    if apply_mix(project, params, "initial mix", d) is not None:
         return
-
-    p = run(BEATSTUDIO + ["master", "--price=2", "--low=2", "--mid=0.5", "--high=3", "--file=" + project], timeout=900)
-    if p.returncode != 0:
-        write_status(d, "error", message="mastering failed", detail=p.stdout[-800:])
+    if not render_preview_and_master(project, params, d, is_first_master=True):
         return
+    publish_results(project, d, session_id)
 
-    out_dir = os.path.join(RESULTS_DIR, session_id)
-    os.makedirs(out_dir, exist_ok=True)
-    shutil.copyfile(os.path.join(d, "preview.wav"), os.path.join(out_dir, "before.wav"))
-    shutil.copyfile(os.path.join(d, "master_1.wav"), os.path.join(out_dir, "after.wav"))
-    os.chmod(os.path.join(out_dir, "before.wav"), 0o644)
-    os.chmod(os.path.join(out_dir, "after.wav"), 0o644)
 
-    write_status(d, "done", before_url="/beatstudio/results/" + session_id + "/before.wav",
-                 after_url="/beatstudio/results/" + session_id + "/after.wav")
+def process_rerender(session_id, d):
+    project = os.path.join(d, "project.json")
+    if not os.path.exists(project):
+        write_status(d, "error", message="no project to remix - record something first")
+        return
+    write_status(d, "processing")
+    params = load_params(d)
+    if apply_mix(project, params, "remix", d) is not None:
+        return
+    if not render_preview_and_master(project, params, d, is_first_master=False):
+        return
+    publish_results(project, d, session_id)
 
 
 def main():
@@ -147,10 +228,14 @@ def main():
                 st = json.load(f)
         except Exception:
             continue
-        if st.get("status") != "uploaded":
+        status = st.get("status")
+        if status not in ("uploaded", "rerender_requested"):
             continue
         try:
-            process_session(session_id, d)
+            if status == "uploaded":
+                process_uploaded(session_id, d)
+            else:
+                process_rerender(session_id, d)
         except Exception as e:
             write_status(d, "error", message="unexpected error: " + str(e))
 

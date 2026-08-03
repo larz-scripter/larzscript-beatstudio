@@ -3,8 +3,8 @@
 <head><!--LZCRIT--><meta name="color-scheme" content="dark"><style>html{background:#0b0f1a;color-scheme:dark}body{background:#0b0f1a;color:#e8edf5}</style><!--/LZCRIT-->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1, viewport-fit=cover">
-<title>LarzBeatStudio — record on a real beat, mixed and mastered live</title>
-<meta name="description" content="Listen to a beat built entirely in Larzscript, record your own vocal over it from your browser, and get it back mixed and professionally mastered.">
+<title>LarzBeatStudio — mix and master your own track, live in the browser</title>
+<meta name="description" content="Record over a beat built entirely in Larzscript, then mix and master it yourself — real track volume/pan, real EQ, compressor and loudness controls, explained in plain language.">
 <style>
 :root{
   --bg:#0a0908; --bg2:#151311; --panel:#1c1917; --panel2:#221e1a; --border:#322d28;
@@ -92,6 +92,34 @@ section .sub{color:var(--muted); font-size:14px; margin:0 0 18px}
 .result{margin-top:22px; display:none}
 .result.on{display:block}
 
+.mixer{display:none; margin-top:22px}
+.mixer.on{display:block}
+.mix-panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:24px 26px}
+.mix-panel + .mix-panel{margin-top:16px}
+.mix-panel h3{margin:0 0 4px; font-size:14px; font-weight:700}
+.mix-panel .track-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px}
+.mix-panel .track-head .tools{display:flex; gap:8px}
+.chip-btn{appearance:none; border:1px solid var(--border); background:var(--panel2); color:var(--muted); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:6px 12px; border-radius:999px; cursor:pointer; transition:.15s ease}
+.chip-btn:hover{border-color:var(--hot); color:var(--text)}
+.chip-btn.active{background:var(--hot); border-color:var(--hot); color:#1a1200}
+.ctrl-row{display:grid; grid-template-columns:140px 1fr 62px; align-items:center; gap:14px; margin:14px 0}
+.ctrl-row label{font-size:13px; color:var(--text); display:flex; align-items:center; gap:6px}
+.ctrl-row input[type="range"]{-webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px; background:var(--border); outline:none}
+.ctrl-row input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--hot); cursor:pointer; border:2px solid var(--bg); box-shadow:0 0 0 1px var(--hot)}
+.ctrl-row input[type="range"]::-moz-range-thumb{width:16px; height:16px; border-radius:50%; background:var(--hot); cursor:pointer; border:2px solid var(--bg)}
+.ctrl-row .val{font-family:var(--mono); font-size:12.5px; color:var(--muted); text-align:right; font-variant-numeric:tabular-nums}
+.info-dot{width:15px; height:15px; border-radius:50%; border:1px solid var(--muted-dim); color:var(--muted-dim); font-family:var(--mono); font-size:10px; line-height:13px; text-align:center; text-decoration:none; flex:none; transition:.15s ease}
+.info-dot:hover{border-color:var(--hot); color:var(--hot)}
+.mixer-actions{display:flex; align-items:center; gap:12px; margin-top:20px; flex-wrap:wrap}
+.btn-primary{appearance:none; border:1px solid var(--hot); background:var(--hot); color:#1a1200; font-weight:700; font-size:13.5px; padding:12px 22px; border-radius:10px; cursor:pointer; transition:.15s ease}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-primary:disabled{opacity:.5; cursor:default; filter:none}
+.btn-ghost{appearance:none; border:1px solid var(--border); background:transparent; color:var(--muted); font-size:13px; padding:11px 18px; border-radius:10px; cursor:pointer; transition:.15s ease}
+.btn-ghost:hover{border-color:var(--hot); color:var(--text)}
+.mixer-note{font-family:var(--mono); font-size:11.5px; color:var(--muted-dim); margin-top:14px}
+.section-label{font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--muted-dim); margin:26px 0 4px}
+.section-label:first-child{margin-top:0}
+
 .rack{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px}
 .unit{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px}
 .unit .n{font-family:var(--mono); font-size:10px; color:var(--hot); letter-spacing:.08em}
@@ -100,6 +128,8 @@ section .sub{color:var(--muted); font-size:14px; margin:0 0 18px}
 
 .note{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; font-size:13.5px; color:var(--muted)}
 .note b{color:var(--text)}
+.note a{color:var(--hot); text-decoration:none}
+.note a:hover{text-decoration:underline}
 
 footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); font-family:var(--mono); font-size:11px; color:var(--muted-dim)}
 </style>
@@ -108,8 +138,8 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
 <main class="wrap">
   <header>
     <p class="eyebrow">LarzBeatStudio &middot; live session</p>
-    <h1>Record on a real beat. Get it back mastered.</h1>
-    <p class="lede">This beat was synthesized, sequenced, mixed, and mastered entirely in Larzscript — real DSP, no ffmpeg, no external audio tool. Listen below, then hit record and lay a vocal over it from right here in your browser. I'll mix it in and master the whole thing.</p>
+    <h1>Record on a real beat. Mix and master it yourself.</h1>
+    <p class="lede">This beat was synthesized, sequenced, mixed, and mastered entirely in Larzscript — real DSP, no ffmpeg, no external audio tool. Listen below, hit record and lay a vocal over it (up to 8 minutes), then use the mixer and master controls to shape your own sound before you're happy with it.</p>
   </header>
 
   <section>
@@ -135,7 +165,7 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
 
   <section>
     <h2>Record on it</h2>
-    <p class="sub">Uses your browser's microphone — nothing is captured until you press record. Recording auto-stops at 30s.</p>
+    <p class="sub">Uses your browser's microphone — nothing is captured until you press record. Recording auto-stops at 8 minutes.</p>
     <div class="rec-panel">
       <div class="rec-main">
         <button class="rec-btn" id="rec-btn" aria-label="Record"><span class="dot"></span></button>
@@ -169,21 +199,106 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
     </div>
   </section>
 
+  <section class="mixer" id="mixer">
+    <h2>Mix &amp; master it yourself</h2>
+    <p class="sub">Real controls, driving the real DSP chain above — not a preview. Change anything, then hit Apply to re-render. The first master is paid for once; every change after that is free. Not sure what a control does? Every (?) links to a <a href="docs/" target="_blank" style="color:var(--hot);text-decoration:none">plain-language explanation</a>.</p>
+
+    <div class="section-label">Tracks</div>
+    <div class="mix-panel" data-track="beat">
+      <div class="track-head">
+        <h3>Beat</h3>
+        <div class="tools">
+          <button class="chip-btn" data-action="solo">Solo</button>
+          <button class="chip-btn" data-action="mute">Mute</button>
+        </div>
+      </div>
+      <div class="ctrl-row">
+        <label>Volume <a class="info-dot" href="docs/#volume" target="_blank">?</a></label>
+        <input type="range" data-param="gain" min="-24" max="12" step="0.5" value="-1">
+        <span class="val" data-readout="gain">-1 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Pan <a class="info-dot" href="docs/#pan" target="_blank">?</a></label>
+        <input type="range" data-param="pan" min="-1" max="1" step="0.05" value="0">
+        <span class="val" data-readout="pan">C</span>
+      </div>
+    </div>
+    <div class="mix-panel" data-track="vocal">
+      <div class="track-head">
+        <h3>Your recording</h3>
+        <div class="tools">
+          <button class="chip-btn" data-action="solo">Solo</button>
+          <button class="chip-btn" data-action="mute">Mute</button>
+        </div>
+      </div>
+      <div class="ctrl-row">
+        <label>Volume <a class="info-dot" href="docs/#volume" target="_blank">?</a></label>
+        <input type="range" data-param="gain" min="-24" max="12" step="0.5" value="2">
+        <span class="val" data-readout="gain">+2 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Pan <a class="info-dot" href="docs/#pan" target="_blank">?</a></label>
+        <input type="range" data-param="pan" min="-1" max="1" step="0.05" value="0">
+        <span class="val" data-readout="pan">C</span>
+      </div>
+    </div>
+
+    <div class="section-label">Master</div>
+    <div class="mix-panel" id="master-panel">
+      <div class="ctrl-row">
+        <label>Warmth <a class="info-dot" href="docs/#warmth" target="_blank">?</a></label>
+        <input type="range" data-master="low" min="-12" max="12" step="0.5" value="2">
+        <span class="val" data-readout="low">+2 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Clarity <a class="info-dot" href="docs/#clarity" target="_blank">?</a></label>
+        <input type="range" data-master="mid" min="-12" max="12" step="0.5" value="0.5">
+        <span class="val" data-readout="mid">+0.5 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Air <a class="info-dot" href="docs/#air" target="_blank">?</a></label>
+        <input type="range" data-master="high" min="-12" max="12" step="0.5" value="3">
+        <span class="val" data-readout="high">+3 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Punch — threshold <a class="info-dot" href="docs/#punch" target="_blank">?</a></label>
+        <input type="range" data-master="thresh" min="-40" max="0" step="1" value="-14">
+        <span class="val" data-readout="thresh">-14 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Punch — ratio <a class="info-dot" href="docs/#punch" target="_blank">?</a></label>
+        <input type="range" data-master="ratio" min="1" max="10" step="0.5" value="3">
+        <span class="val" data-readout="ratio">3:1</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Loudness <a class="info-dot" href="docs/#loudness" target="_blank">?</a></label>
+        <input type="range" data-master="ceiling" min="-12" max="-0.1" step="0.1" value="-1">
+        <span class="val" data-readout="ceiling">-1 dB</span>
+      </div>
+    </div>
+
+    <div class="mixer-actions">
+      <button class="btn-primary" id="apply-btn">Apply &amp; re-render</button>
+      <button class="btn-ghost" id="reset-btn">Reset to defaults</button>
+    </div>
+    <div class="mixer-note" id="mixer-status"></div>
+  </section>
+
   <section>
     <h2>What the mastering chain does</h2>
     <div class="rack">
-      <div class="unit"><div class="n">01</div><h3>3-band EQ</h3><p>Low-shelf, mid-peak, high-shelf — real biquad filters shaping tone first.</p></div>
-      <div class="unit"><div class="n">02</div><h3>Compressor</h3><p>Linked stereo — one gain per sample-frame from whichever channel is louder.</p></div>
-      <div class="unit"><div class="n">03</div><h3>Limiter</h3><p>A true brickwall ceiling — nothing gets past it.</p></div>
-      <div class="unit"><div class="n">04</div><h3>Normalize</h3><p>Brings the final peak to a consistent, competitive level.</p></div>
+      <div class="unit"><div class="n">01</div><h3>3-band EQ</h3><p>Low-shelf, mid-peak, high-shelf — real biquad filters. Warmth/Clarity/Air above.</p></div>
+      <div class="unit"><div class="n">02</div><h3>Compressor</h3><p>Linked stereo — one gain per sample-frame from whichever channel is louder. Punch above.</p></div>
+      <div class="unit"><div class="n">03</div><h3>Limiter</h3><p>A true brickwall ceiling — nothing gets past it. Loudness above.</p></div>
+      <div class="unit"><div class="n">04</div><h3>Streamed, chunk by chunk</h3><p>Processes a few seconds at a time so an 8-minute take uses the same memory as a 30-second one.</p></div>
     </div>
   </section>
 
   <section>
-    <div class="note"><b>Why this works this way:</b> nothing here is faked. The beat is real synthesis, your recording is real audio from your real microphone, and the mix/master is a real Larzscript program running on the server — it just takes it a little while (usually under a couple of minutes), because every DSP stage is computed from scratch, not shelled out to a pro audio tool.</div>
+    <div class="note"><b>Why this works this way:</b> nothing here is faked. The beat is real synthesis, your recording is real audio from your real microphone, and the mix/master is a real Larzscript program running on the server, now with a native-C fast path for the heavy per-sample math. Every control above maps directly to a real parameter in that program — turning "Warmth" up really does raise the low-shelf EQ's gain. Full explanations: <a href="docs/">the docs page</a>.</div>
   </section>
 
-  
+
 </main>
 
 <script>
@@ -251,12 +366,13 @@ const recTimer = document.getElementById("rec-timer");
 const recStatus = document.getElementById("rec-status");
 const recProgress = document.getElementById("rec-progress");
 const resultBox = document.getElementById("result");
+const mixerBox = document.getElementById("mixer");
 
 let mediaRecorder = null;
 let chunks = [];
 let timerInterval = null;
 let elapsed = 0;
-const MAX_SECONDS = 30;
+const MAX_SECONDS = 480; // verified safe on the production box up to 8 minutes - see PLAN.md
 
 function setStatus(msg, cls){ recStatus.textContent = msg || ""; recStatus.className = "rec-status" + (cls ? " " + cls : ""); }
 
@@ -314,7 +430,7 @@ async function uploadRecording(){
     });
     if (!res.ok) throw new Error("upload failed");
     setStatus("Uploaded. Mixing and mastering your track now — this usually takes under a couple of minutes...");
-    pollStatus();
+    pollStatus(false);
   } catch (e) {
     recProgress.classList.remove("on");
     setStatus("Upload failed — check your connection and try again.", "err");
@@ -322,7 +438,7 @@ async function uploadRecording(){
 }
 
 let resultDeck = null;
-function pollStatus(){
+function pollStatus(isRerender){
   const iv = setInterval(async () => {
     let data;
     try {
@@ -330,26 +446,151 @@ function pollStatus(){
       data = await res.json();
     } catch (e) { return; }
     if (data.status === "processing") {
-      setStatus("Mixing and mastering your track now — this usually takes under a couple of minutes...");
+      const msg = isRerender
+        ? "Re-rendering with your new settings — usually under a minute..."
+        : "Mixing and mastering your track now — this usually takes under a couple of minutes...";
+      setStatus(msg);
+      if (isRerender) setMixerStatus(msg);
     } else if (data.status === "done") {
       clearInterval(iv);
       recProgress.classList.remove("on");
       setStatus("Done — your mastered track is ready below.", "ok");
       resultBox.classList.add("on");
+      mixerBox.classList.add("on");
       const resultData = {
-        before: { url: data.before_url, peak: -3.0 },
-        after:  { url: data.after_url,  peak: -1.0 },
+        before: { url: data.before_url + "?v=" + Date.now(), peak: -3.0 },
+        after:  { url: data.after_url + "?v=" + Date.now(),  peak: (typeof data.peak_dbfs === "number" ? data.peak_dbfs : -1.0) },
       };
       if (!resultDeck) resultDeck = makeDeck("result", resultData);
       else resultDeck.setData(resultData);
-      resultBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (isRerender) {
+        setMixerStatus("Updated — listen to “Your mastered track” above.", "ok");
+        setApplyEnabled(true);
+      } else {
+        resultBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     } else if (data.status === "error") {
       clearInterval(iv);
       recProgress.classList.remove("on");
-      setStatus("Something went wrong: " + (data.message || "unknown error") + " — try recording again.", "err");
+      const msg = "Something went wrong: " + (data.message || "unknown error") + " — try again.";
+      setStatus(msg, "err");
+      if (isRerender) { setMixerStatus(msg, "err"); setApplyEnabled(true); }
     }
   }, 3000);
 }
+
+// ---- mixer + master controls ----
+const DEFAULTS = {
+  tracks: {
+    beat:  { gain: -1, pan: 0, mute: false },
+    vocal: { gain: 2,  pan: 0, mute: false },
+  },
+  master: { low: 2, mid: 0.5, high: 3, thresh: -14, ratio: 3, ceiling: -1 },
+};
+
+function fmtDb(v){ const n = Number(v); return (n > 0 ? "+" : "") + n.toFixed(n % 1 === 0 ? 0 : 1) + " dB"; }
+function fmtPan(v){ const n = Number(v); if (Math.abs(n) < 0.01) return "C"; return (n < 0 ? "L" : "R") + Math.round(Math.abs(n) * 100); }
+
+function readoutFor(input){
+  const row = input.closest(".ctrl-row");
+  return row.querySelector(".val");
+}
+
+function wireSlider(input, formatFn){
+  const out = readoutFor(input);
+  const update = () => { out.textContent = formatFn(input.value); };
+  input.addEventListener("input", update);
+  update();
+}
+
+document.querySelectorAll('.mix-panel[data-track] input[data-param="gain"]').forEach(el => wireSlider(el, fmtDb));
+document.querySelectorAll('.mix-panel[data-track] input[data-param="pan"]').forEach(el => wireSlider(el, fmtPan));
+wireSlider(document.querySelector('input[data-master="low"]'), fmtDb);
+wireSlider(document.querySelector('input[data-master="mid"]'), fmtDb);
+wireSlider(document.querySelector('input[data-master="high"]'), fmtDb);
+wireSlider(document.querySelector('input[data-master="thresh"]'), v => Number(v).toFixed(0) + " dB");
+wireSlider(document.querySelector('input[data-master="ratio"]'), v => Number(v).toFixed(1) + ":1");
+wireSlider(document.querySelector('input[data-master="ceiling"]'), v => Number(v).toFixed(1) + " dB");
+
+document.querySelectorAll('.mix-panel[data-track] .chip-btn[data-action="mute"]').forEach(btn => {
+  btn.addEventListener("click", () => btn.classList.toggle("active"));
+});
+document.querySelectorAll('.mix-panel[data-track] .chip-btn[data-action="solo"]').forEach(btn => {
+  btn.addEventListener("click", () => {
+    const wasActive = btn.classList.contains("active");
+    document.querySelectorAll('.mix-panel[data-track] .chip-btn[data-action="solo"]').forEach(b => b.classList.remove("active"));
+    if (!wasActive) btn.classList.add("active");
+  });
+});
+
+function collectParams(){
+  const soloed = document.querySelector('.mix-panel[data-track] .chip-btn[data-action="solo"].active');
+  const soloTrack = soloed ? soloed.closest(".mix-panel").dataset.track : null;
+  const tracks = {};
+  document.querySelectorAll('.mix-panel[data-track]').forEach(panel => {
+    const name = panel.dataset.track;
+    const gain = Number(panel.querySelector('input[data-param="gain"]').value);
+    const pan = Number(panel.querySelector('input[data-param="pan"]').value);
+    const mutedByChip = panel.querySelector('.chip-btn[data-action="mute"]').classList.contains("active");
+    // Solo overrides individual mute state: soloing one track mutes every
+    // other track for this render, matching what "solo" means on a real
+    // mixer - it's a client-side convenience, the engine only ever sees
+    // a plain mute flag per track.
+    const mute = soloTrack ? (name !== soloTrack) : mutedByChip;
+    tracks[name] = { gain, pan, mute };
+  });
+  const master = {};
+  document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
+    master[input.dataset.master] = Number(input.value);
+  });
+  return { tracks, master };
+}
+
+function applyDefaultsToUI(){
+  document.querySelectorAll('.mix-panel[data-track]').forEach(panel => {
+    const name = panel.dataset.track;
+    const d = DEFAULTS.tracks[name];
+    panel.querySelector('input[data-param="gain"]').value = d.gain;
+    panel.querySelector('input[data-param="pan"]').value = d.pan;
+    panel.querySelector('.chip-btn[data-action="mute"]').classList.remove("active");
+    panel.querySelector('.chip-btn[data-action="solo"]').classList.remove("active");
+  });
+  document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
+    input.value = DEFAULTS.master[input.dataset.master];
+  });
+  document.querySelectorAll('.mix-panel input[type="range"]').forEach(input => input.dispatchEvent(new Event("input")));
+}
+
+function setMixerStatus(msg, cls){
+  const el = document.getElementById("mixer-status");
+  el.textContent = msg || "";
+  el.style.color = cls === "err" ? "var(--ember)" : cls === "ok" ? "var(--hot)" : "";
+}
+function setApplyEnabled(on){ document.getElementById("apply-btn").disabled = !on; }
+
+document.getElementById("apply-btn").addEventListener("click", async () => {
+  setApplyEnabled(false);
+  setMixerStatus("Sending your changes...");
+  try {
+    const res = await fetch(API + "/params?session=" + sessionId, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectParams()),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    setMixerStatus("Re-rendering with your new settings — usually under a minute...");
+    pollStatus(true);
+  } catch (e) {
+    setMixerStatus("Couldn't apply changes: " + e.message, "err");
+    setApplyEnabled(true);
+  }
+});
+
+document.getElementById("reset-btn").addEventListener("click", () => {
+  applyDefaultsToUI();
+  setMixerStatus("Reset to defaults — hit Apply to re-render with them.");
+});
 </script>
 <!--LZNAV--><style>.nav-links{display:flex;align-items:center;gap:22px}.nav-links a{margin:0}.nav-links .lznav-link,.nav-links .lznav-top{color:#8b98a9;font-size:14px;font-weight:600;background:none;border:0;cursor:pointer;font-family:inherit;padding:0;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.nav-links .lznav-link:hover,.nav-links .lznav-top:hover{color:#e8edf5}.lznav-top i{font-style:normal;font-size:10px;opacity:.7;transition:.2s}.lznav-dd{position:relative;display:inline-flex}.lznav-panel{position:absolute;top:calc(100% + 14px);right:0;background:#0e1526;border:1px solid #26303d;border-radius:14px;padding:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);opacity:0;visibility:hidden;transform:translateY(-6px);transition:.18s ease;z-index:70;min-width:210px}.lznav-dd:hover .lznav-panel,.lznav-dd.open .lznav-panel{opacity:1;visibility:visible;transform:none}.lznav-dd:hover .lznav-top i,.lznav-dd.open .lznav-top i{transform:rotate(180deg)}.lznav-panel a{display:block;color:#8b98a9;font-size:13.5px;font-weight:500;padding:7px 11px;border-radius:8px}.lznav-panel a:hover{color:#e8edf5;background:rgba(255,255,255,.05)}.lznav-mega{width:min(90vw,660px)}.lznav-mega-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px 14px}.lznav-mcol h5{color:#e8edf5;font-size:11.5px;font-weight:700;margin:8px 11px 3px;text-transform:uppercase;letter-spacing:.05em}.lznav-all{color:#00c896 !important;font-weight:700 !important;padding:9px 11px !important;margin-top:6px !important;border-top:1px solid #1c2430}.lznav-burger{display:none;background:none;border:0;cursor:pointer;padding:8px;margin-left:10px}.lznav-burger span{display:block;width:22px;height:2px;background:#e8edf5;border-radius:2px;margin:5px 0;transition:.25s}.lznav-burger.on span:nth-child(1){transform:translateY(7px) rotate(45deg)}.lznav-burger.on span:nth-child(2){opacity:0}.lznav-burger.on span:nth-child(3){transform:translateY(-7px) rotate(-45deg)}@media(max-width:820px){.lznav-burger{display:inline-block}nav .nav-links{position:absolute;top:100%;left:0;right:0;background:#0e1526;border-bottom:1px solid #26303d;flex-direction:column;align-items:stretch;gap:0;margin:0;padding:6px 0;transform:translateY(-8px);opacity:0;pointer-events:none;transition:.2s ease;max-height:82vh;overflow:auto;z-index:60}nav .nav-links.lznav-open{transform:none;opacity:1;pointer-events:auto}.nav-links .lznav-link,.nav-links .lznav-top{width:100%;justify-content:space-between;padding:14px 20px;font-size:15px;border-top:1px solid rgba(255,255,255,.05)}.lznav-dd{display:block;width:100%}.lznav-panel{position:static;opacity:1;visibility:visible;transform:none;transition:none;display:none;width:auto;min-width:0;border:0;border-radius:0;box-shadow:none;padding:0;background:rgba(255,255,255,.02)}.lznav-dd.open .lznav-panel{display:block}.lznav-mega{width:auto}.lznav-mega-grid{grid-template-columns:1fr;gap:0}.lznav-panel a{padding:12px 34px}.lznav-mcol h5{margin:10px 34px 2px}.lznav-all{margin:0 !important;padding:12px 34px !important;border-top:1px solid rgba(255,255,255,.05)}.nav-links .nav-cta{margin:12px 20px !important;text-align:center}}</style><script>(function(){function init(){var bar=document.querySelector('nav .nav-in')||document.querySelector('nav');var links=document.querySelector('nav .nav-links');if(!bar||!links||bar.querySelector('.lznav-burger'))return;var b=document.createElement('button');b.className='lznav-burger';b.setAttribute('aria-label','Toggle menu');b.innerHTML='<span></span><span></span><span></span>';b.addEventListener('click',function(){links.classList.toggle('lznav-open');b.classList.toggle('on');});bar.appendChild(b);var dds=links.querySelectorAll('.lznav-dd');links.querySelectorAll('.lznav-top').forEach(function(t){t.addEventListener('click',function(e){e.preventDefault();var dd=t.parentNode,was=dd.classList.contains('open');dds.forEach(function(d){d.classList.remove('open');});if(!was)dd.classList.add('open');});});links.addEventListener('click',function(e){if(e.target.closest('a')){links.classList.remove('lznav-open');b.classList.remove('on');dds.forEach(function(d){d.classList.remove('open');});}});document.addEventListener('click',function(e){if(!e.target.closest('nav')){dds.forEach(function(d){d.classList.remove('open');});links.classList.remove('lznav-open');b.classList.remove('on');}});}if(document.readyState!=='loading')init();else document.addEventListener('DOMContentLoaded',init);})();</script><style>
 .lznav-ava{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#00c896,#6366f1);color:#04120d;font-weight:800;font-size:11px;margin-right:7px;flex:none}

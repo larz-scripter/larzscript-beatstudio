@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head><!--LZCRIT--><meta name="color-scheme" content="dark"><style>html{background:#0b0f1a;color-scheme:dark}body{background:#0b0f1a;color:#e8edf5}</style><!--/LZCRIT-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1, viewport-fit=cover">
+<title>LarzBeatStudio — what each control does</title>
+<meta name="description" content="Plain-language explanations of every mixer and mastering control on LarzBeatStudio — volume, pan, warmth, clarity, air, punch, and loudness.">
+<style>
+:root{
+  --bg:#0a0908; --bg2:#151311; --panel:#1c1917; --panel2:#221e1a; --border:#322d28;
+  --text:#f2ede4; --muted:#948c81; --muted-dim:#65605a;
+  --hot:#ffb020; --hot-dim:#8a5f14; --ember:#ff5a3c;
+  --mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+  --sans: -apple-system, "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+}
+:root[data-theme="light"]{
+  --bg:#f4f1ea; --bg2:#eae4d8; --panel:#fffdf8; --panel2:#f1ebdd; --border:#ddd3c0;
+  --text:#211d16; --muted:#6b6255; --muted-dim:#9a8f7c; --hot:#c17a00; --hot-dim:#ffdca0; --ember:#c9411f;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f4f1ea; --bg2:#eae4d8; --panel:#fffdf8; --panel2:#f1ebdd; --border:#ddd3c0;
+    --text:#211d16; --muted:#6b6255; --muted-dim:#9a8f7c; --hot:#c17a00; --hot-dim:#ffdca0; --ember:#c9411f;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased}
+.wrap{max-width:760px; margin:0 auto; padding:0 24px 90px}
+a{color:var(--hot); text-decoration:none}
+a:hover{text-decoration:underline}
+
+header{padding:48px 0 26px; border-bottom:1px solid var(--border)}
+.eyebrow{font-family:var(--mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--hot); margin:0 0 14px}
+h1{font-size:clamp(26px,4.6vw,38px); font-weight:800; letter-spacing:-.02em; margin:0 0 10px; text-wrap:balance}
+.lede{color:var(--muted); font-size:15.5px; max-width:60ch; margin:0 0 8px}
+.back{display:inline-block; margin-top:14px; font-family:var(--mono); font-size:12.5px; color:var(--muted)}
+
+.entry{margin:44px 0; padding-top:6px; scroll-margin-top:24px}
+.entry h2{font-size:20px; font-weight:800; margin:0 0 4px; display:flex; align-items:center; gap:10px}
+.entry .range{font-family:var(--mono); font-size:11.5px; color:var(--muted-dim); background:var(--panel2); border:1px solid var(--border); border-radius:999px; padding:3px 10px; font-weight:600}
+.entry .default{font-family:var(--mono); font-size:11.5px; color:var(--muted-dim)}
+.entry p{color:var(--muted); font-size:14.5px; margin:10px 0}
+.entry p b{color:var(--text)}
+.entry .try{background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--hot); border-radius:8px; padding:12px 16px; font-size:13.5px; color:var(--muted); margin-top:14px}
+.entry .try b{color:var(--text)}
+
+nav.toc{display:flex; flex-wrap:wrap; gap:8px; margin:26px 0 0}
+nav.toc a{background:var(--panel2); border:1px solid var(--border); border-radius:999px; padding:6px 14px; font-size:13px; color:var(--text)}
+nav.toc a:hover{border-color:var(--hot); text-decoration:none}
+
+footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); font-family:var(--mono); font-size:11px; color:var(--muted-dim)}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <p class="eyebrow">LarzBeatStudio &middot; docs</p>
+    <h1>What each control does</h1>
+    <p class="lede">Every slider on the mixer maps to a real parameter in a real signal-processing chain — nothing here is a preset or a filter you'd find in a photo app. This page explains what each one actually changes in the sound, in plain language, so you can make an informed choice instead of guessing.</p>
+    <a class="back" href="../">&larr; Back to the mixer</a>
+    <nav class="toc">
+      <a href="#volume">Volume</a>
+      <a href="#pan">Pan</a>
+      <a href="#warmth">Warmth</a>
+      <a href="#clarity">Clarity</a>
+      <a href="#air">Air</a>
+      <a href="#punch">Punch</a>
+      <a href="#loudness">Loudness</a>
+    </nav>
+  </header>
+
+  <section class="entry" id="volume">
+    <h2>Volume <span class="range">-24 to +12 dB</span></h2>
+    <p class="default">Default: beat -1 dB, your recording +2 dB</p>
+    <p>How loud a single track (the beat, or your recording) is <b>before</b> it's mixed with the other one. This is a "track fader," the same idea as the volume sliders on a real mixing desk — it doesn't change the tone of the track, only its level relative to everything else.</p>
+    <p>dB (decibels) is a ratio, not a straight percentage: <b>every -6 dB roughly halves the perceived loudness</b>, and every +6 dB roughly doubles it. 0 dB means "unchanged." Small moves (1-3 dB) are usually enough to fix a balance problem.</p>
+    <div class="try"><b>Try this:</b> if your vocal is getting buried under the beat, don't just push your vocal up — try pulling the beat's volume down 2-3 dB instead. It often sounds more natural than making the vocal too loud.</div>
+  </section>
+
+  <section class="entry" id="pan">
+    <h2>Pan <span class="range">L100 to R100 (center by default)</span></h2>
+    <p class="default">Default: both tracks centered</p>
+    <p>Where a track sits between your left and right speakers/earbuds. Center (C) means it plays equally in both ears — the normal choice for a lead vocal or a beat you want to feel "in the middle" of the mix. Panning left or right pushes a track more into one ear, which can create separation between the beat and the vocal so they don't compete for the same space.</p>
+    <div class="try"><b>Try this:</b> for a single beat + single vocal (this app's setup), centering both usually sounds most natural — panning is more useful once you're layering several tracks. Leave it centered unless you have a specific reason to move it.</div>
+  </section>
+
+  <section class="entry" id="warmth">
+    <h2>Warmth <span class="range">-12 to +12 dB</span></h2>
+    <p class="default">Default: +2 dB</p>
+    <p>A <b>low shelf EQ</b> centered around 200Hz — it raises or lowers everything below that frequency (bass, kick drum weight, the low end of a voice) while leaving the rest of the mix alone. Turning it up adds body/fullness ("warmth"); turning it down (negative dB) thins the mix out, which can help if it sounds muddy or boomy.</p>
+    <p>This is a real biquad filter, the same building block used in professional EQ plugins — not a volume trick applied to the whole track.</p>
+    <div class="try"><b>Try this:</b> if the mix sounds boomy or unclear, try -2 to -4 dB here before touching anything else — too much low end is the most common reason a mix sounds muddy.</div>
+  </section>
+
+  <section class="entry" id="clarity">
+    <h2>Clarity <span class="range">-12 to +12 dB</span></h2>
+    <p class="default">Default: +0.5 dB</p>
+    <p>A <b>mid peak EQ</b> centered around 2kHz — the frequency range where most of a voice's intelligibility lives. Turning it up can help a vocal cut through a busy beat without needing to raise its overall Volume; turning it down can soften a harsh or "boxy" sounding recording.</p>
+    <div class="try"><b>Try this:</b> if your voice sounds like it's "there" but not clearly understandable over the beat, a small clarity boost (+1 to +3 dB) often helps more than raising volume.</div>
+  </section>
+
+  <section class="entry" id="air">
+    <h2>Air <span class="range">-12 to +12 dB</span></h2>
+    <p class="default">Default: +3 dB</p>
+    <p>A <b>high shelf EQ</b> centered around 6kHz — everything above that gets boosted or cut. This is the "sparkle" or "openness" at the very top of the sound (hi-hats, sibilance, breathiness in a vocal). A little goes a long way; too much can sound harsh or sibilant ("essy" S sounds).</p>
+    <div class="try"><b>Try this:</b> if S and T sounds in your recording feel sharp or piercing, pull Air down a bit before assuming your recording itself is the problem.</div>
+  </section>
+
+  <section class="entry" id="punch">
+    <h2>Punch — threshold &amp; ratio <span class="range">threshold -40 to 0 dB &middot; ratio 1:1 to 10:1</span></h2>
+    <p class="default">Default: -14 dB threshold, 3:1 ratio</p>
+    <p>This is a <b>compressor</b> — it automatically turns down whatever's loudest, in real time, so the loud and quiet parts of your track sit closer together instead of swinging wildly. <b>Threshold</b> is the level a sound has to cross before compression kicks in (a lower/more-negative threshold means more of the track gets compressed). <b>Ratio</b> is how hard it turns things down once it kicks in — 1:1 does nothing, higher ratios (like 8:1 or 10:1) squash peaks harder and start to sound more obviously "pumped" or aggressive.</p>
+    <p>This one control does more for a "professional" feel than almost anything else here — it's the difference between a track that sounds like a rough phone recording and one that sounds deliberately produced.</p>
+    <div class="try"><b>Try this:</b> a threshold around -14 to -18 dB with a 3:1 to 4:1 ratio is a solid, controlled starting point. Push the ratio toward 6:1-10:1 for a more obviously "squashed," modern loud sound; pull it toward 1.5:1-2:1 for something that breathes more naturally.</div>
+  </section>
+
+  <section class="entry" id="loudness">
+    <h2>Loudness <span class="range">-12 to -0.1 dBFS</span></h2>
+    <p class="default">Default: -1 dBFS</p>
+    <p>This sets the final <b>ceiling</b> your track is allowed to reach — a true brickwall limiter, the very last stage in the chain. Nothing gets louder than this number, no matter what. Raising it (moving closer to 0) makes the final result louder overall; the trade-off is less "headroom," which can occasionally sound more squashed on already-loud material.</p>
+    <p>0 dBFS is the absolute maximum a digital file can represent without distorting — professionally mastered tracks almost always sit slightly under it (commonly -1 to -2 dBFS) so they play back cleanly on every device and streaming platform.</p>
+    <div class="try"><b>Try this:</b> -1 dBFS is a safe, standard target that matches most commercial releases. Only push it toward -0.1 dBFS if you specifically want the loudest possible result and don't mind a slightly more compressed feel.</div>
+  </section>
+
+  <section class="entry">
+    <h2>Why this works this way</h2>
+    <p>Every one of these controls maps directly to a parameter in a real, from-scratch signal-processing program written in Larzscript — a 3-band EQ (Warmth/Clarity/Air), a linked stereo compressor (Punch), and a brickwall limiter (Loudness), the same building blocks real mastering engineers and plugins use. There's no AI guessing, no hidden preset — moving a slider and hitting "Apply" re-runs that exact math on your actual recording, streamed through in small chunks so an 8-minute take renders in about the same time as a 30-second one.</p>
+    <a href="../">&larr; Back to the mixer</a>
+  </section>
+</main>
+</body>
+</html>
