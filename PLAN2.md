@@ -1,9 +1,20 @@
 # PLAN 2: recording workspace, auto beat maker, vocal editing, polish
 
-Status: **drafted 2026-08-04, not yet built.** PLAN.md (the chunked-
-streaming + interactive mixer rewrite) is shipped and live. This is the
-next round, recorded the same way for the same reason - so a future
-session can pick it up without re-deriving it.
+Status: **Phases A-C shipped and live 2026-08-04** (larzos.com/beatstudio/).
+Phase A (ops hardening - cleanup cron + error_watch monitoring) was
+already done before this round started. Phases B (recording workspace +
+vocal editing) and C (auto-generating beat maker) built, tested (3/3
+beatstudio.lz tests, 35/35 native tests, full local + live-production
+end-to-end runs of every job type, real signal analysis on the actual
+produced masters) and deployed in one session. Real bugs found and fixed
+along the way: a voice-edit self-clobbering read/write race, a
+1-second-resolution timestamp collision in the fix for that same bug,
+render_pattern() unconditionally synthesizing unused drum voices (~115s
+-> ~26s for a real live request once fixed), and a status-clobbering
+race between a still-processing beat job and a concurrent /api/assemble
+call. Phase D (sidechain ducking, stereo widening, saturation, delay
+send) is the only piece of this plan not yet built - see below,
+unchanged from the original draft.
 
 ## Why
 
