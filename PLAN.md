@@ -1,10 +1,10 @@
 # PLAN: interactive mixer/master + long-form audio on larzos.com/beatstudio/
 
-Status: **drafted 2026-08-03, not yet built.** Recorded here (and pasted into
-the originating chat session) specifically so a future session with no
-memory of this conversation can pick the work back up without re-deriving
-it. Nothing in this doc is implemented yet — treat every "Phase 0" item as
-a blocking spike, not a known fact.
+Status: **SHIPPED 2026-08-04.** Drafted 2026-08-03, all six phases built,
+verified, and deployed live the same session. Left in place (updated with
+real final numbers instead of estimates) as the record of what was built
+and why, per the same "don't lose this if the session ends" reasoning that
+motivated writing it before any code existed.
 
 ## Why
 
@@ -244,10 +244,72 @@ measured). Do not repeat that here at 10x the length and a real UI surface.
 - No claim of literally unlimited length — Phase 0's empirical ceiling is
   the real cap communicated on the page, not an unbounded promise.
 
-## Open questions for a future session picking this up
+## What actually shipped (real numbers, not estimates)
 
-- What did Phase 0's actual numbers come out to (interpreter chunked
-  samples/sec, AOT-compiled samples/sec, real srv66 memory ceiling at
-  1/2/5/8 minutes)? Nothing past Phase 0 should be built without those.
-- Did the interpreter already gain the chunked-I/O primitives Phase 0.1
-  needs, or does it need an upstream feature request first?
+- **Phase 0 findings**: the deployed interpreter (native-v1.26.0 at the
+  time) had `read_file_bytes`/`append_file`/`write_file` but no ranged
+  read or in-place byte patch. Interpreted per-sample master-chain
+  throughput measured **~10,700 frames/sec on srv66** - a 5-minute stereo
+  master would've taken ~10 minutes of pure compute, confirming Phase 2
+  was required, not optional. A local sandbox dsp/wav package draft
+  already called `_native_*`/`file_size`/`read_file_bytes_range`/
+  `patch_file_bytes` that didn't exist anywhere (same bug class in two
+  places) - and had never been published to `larzscript-packages`
+  either. List memory cost measured directly (VmHWM while building
+  1M/5M/13.2M-element lists): **~105-115 bytes/element** - confirms a
+  whole 5-minute stereo buffer (~13.2M elements) was never going to fit.
+- **Phase 1+2**: implemented the missing native builtins for real in
+  `native/larzscript.c` (`_native_master_block`, `_native_mix_add`, plus
+  the dsp/wav packages' own documented `_native_biquad_process_buffer`
+  etc. and `file_size`/`read_file_bytes_range`/`patch_file_bytes`/
+  `_native_pcm16_encode`/`_native_pcm16_decode`), published as
+  **native-v1.35.0**, and published the previously-uncommitted dsp/wav
+  package versions to `larzscript-packages`. `beatstudio.lz` rewritten so
+  every track is one real WAV file, produced via `wav.open_write`/
+  `write_chunk`/`close_write` and consumed via true random-access reads -
+  never held whole in memory. `_native_master_block` measured
+  **~570,000+ frames/sec on srv66** (~50x the interpreted path), verified
+  bit-identical to the old per-sample loop and identical across arbitrary
+  chunk boundaries.
+- **Real srv66 numbers** (1.9GB RAM, real `dmesg` monitoring, nothing
+  guessed): a 5-minute beat+vocal master that used to be unsafe past ~50s
+  now renders in **~32s at ~518MB peak RSS**; an **8-minute** render lands
+  at the **same ~518MB peak** - memory no longer scales with duration at
+  all, confirming the chunked design actually decoupled the two.
+- **Phase 3+4**: shipped both control-depth options together (per the
+  user's choice of "1 and 2") - real multi-track mixer (beat + your
+  recording: volume/pan/mute/solo) and the full master chain (Warmth/
+  Clarity/Air EQ, Punch threshold+ratio compressor, Loudness limiter
+  ceiling) as real parameters, friendly-labeled with real units and a
+  linked docs page (`web/docs.html`) per control. New `remaster` command
+  (companion to `master`) makes iterating on settings free after the
+  first paid render, instead of re-charging on every slider tweak.
+- **Phase 5**: deployed live to srv66 2026-08-04 - new interpreter binary
+  (backed up the old one first), updated dsp/wav packages, new
+  `beatstudio.lz`/`backend.py`/`process.py`/`page.html`/`docs.html`.
+  Verified with a REAL end-to-end run through the live production
+  API/cron (not a local mock): a 6-minute upload → full paid pipeline in
+  67s, then a remix+remaster through the live `/api/params` endpoint in
+  57s, correctly free (`spent_cents` unchanged, second master's
+  `price_cents` = 0). Clean `dmesg` throughout.
+- **Recording cap**: raised 30s → **8 minutes** (480s) on the page,
+  backed by the verified-safe numbers above, not a round-number guess.
+
+## Known gaps / honestly not done
+
+- Could not do live browser/visual testing of the new mixer UI - this
+  sandbox has no browser or Node available. Validated instead via: full
+  manual review of the JS, a structural brace/string-balance check, and
+  the real HTTP contract end-to-end via `curl` against the actual
+  deployed `backend.py` (valid params accepted+clamped, invalid
+  session/still-processing/malformed-body all return the right codes). A
+  manual click-through in a real browser is still worth doing.
+- `LARZSCRIPT_VERSION` in `native/larzscript.c` was found stuck at
+  "1.26.0" despite native tags already at v1.34.0 (a pre-existing,
+  unrelated release-process gap) - fixed opportunistically to 1.35.0
+  since this session was already bumping it for a real release, but the
+  root cause (the version string not auto-bumping with the release
+  workflow) wasn't investigated further.
+- Drum-pattern editing (the sequencer itself) is still fixed/hardcoded on
+  the page - this pass scoped to track mix + master chain, not a step
+  sequencer UI. A real, separate feature if wanted later.
