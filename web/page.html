@@ -120,6 +120,27 @@ section .sub{color:var(--muted); font-size:14px; margin:0 0 18px}
 .section-label{font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--muted-dim); margin:26px 0 4px}
 .section-label:first-child{margin-top:0}
 
+.genre-row{display:flex; flex-wrap:wrap; gap:8px}
+.genre-chip{appearance:none; border:1px solid var(--border); background:var(--panel2); color:var(--muted); font-size:13.5px; font-weight:600; padding:10px 16px; border-radius:10px; cursor:pointer; transition:.15s ease}
+.genre-chip:hover{border-color:var(--hot); color:var(--text)}
+.genre-chip.active{background:var(--hot); border-color:var(--hot); color:#1a1200}
+.mini-deck{display:none; margin-top:18px}
+.mini-deck.on{display:block}
+
+.takes-list{margin-top:20px; display:flex; flex-direction:column; gap:12px}
+.take-card{background:var(--panel2); border:1px solid var(--border); border-radius:12px; padding:16px 18px}
+.take-head{display:flex; align-items:center; gap:10px; margin-bottom:10px}
+.take-head b{font-size:14px}
+.take-head .take-dur{font-family:var(--mono); font-size:12px; color:var(--muted)}
+.take-tools{display:flex; gap:6px; margin-left:auto}
+.take-tools button{appearance:none; border:1px solid var(--border); background:var(--panel); color:var(--muted); width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:13px; transition:.15s ease}
+.take-tools button:hover{border-color:var(--hot); color:var(--text)}
+.take-tools button:disabled{opacity:.35; cursor:default}
+.take-card .ctrl-row{grid-template-columns:96px 1fr 54px; margin:8px 0}
+.fx-toggle{display:flex; align-items:center; gap:9px; font-size:13.5px; color:var(--text); margin:10px 0; cursor:pointer}
+.fx-toggle input{width:16px; height:16px; accent-color:var(--hot); cursor:pointer}
+.fx-toggle span.hint{color:var(--muted); font-size:12px; font-weight:400}
+
 .rack{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px}
 .unit{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px}
 .unit .n{font-family:var(--mono); font-size:10px; color:var(--hot); letter-spacing:.08em}
@@ -164,19 +185,76 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
   </section>
 
   <section>
-    <h2>Record on it</h2>
-    <p class="sub">Uses your browser's microphone — nothing is captured until you press record. Recording auto-stops at 8 minutes.</p>
+    <h2>Choose your beat</h2>
+    <p class="sub">Pick a genre and tempo, then generate a real pattern — kick/snare/hihat/clap plus open hat, tom, crash and an 808, arranged into intro/groove/fill/outro. Regenerate as many times as you like, entirely free.</p>
+    <div class="rec-panel">
+      <div class="genre-row" id="genre-row">
+        <button class="genre-chip" data-genre="trap">Trap</button>
+        <button class="genre-chip" data-genre="lofi">Lo-fi</button>
+        <button class="genre-chip active" data-genre="boombap">Boom Bap</button>
+        <button class="genre-chip" data-genre="pop">Pop</button>
+        <button class="genre-chip" data-genre="afrobeat">Afrobeat</button>
+        <button class="genre-chip" data-genre="house">House</button>
+      </div>
+      <div class="ctrl-row" style="margin-top:18px">
+        <label>Tempo</label>
+        <input type="range" id="bpm-slider" min="60" max="200" step="1" value="90">
+        <span class="val" id="bpm-val">90 BPM</span>
+      </div>
+      <div class="mixer-actions" style="margin-top:16px">
+        <button class="btn-primary" id="generate-btn">Generate a new beat</button>
+        <span class="mixer-note" id="beatgen-status" style="margin-top:0"></span>
+      </div>
+      <div class="deck mini-deck" id="deck-beatgen">
+        <div class="transport">
+          <button class="play-btn" data-deck="beatgen" aria-label="Play">
+            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+          <div class="scrub" data-deck="beatgen"><div class="scrub-fill"></div></div>
+          <span class="time" data-deck="beatgen">0:00</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Record your vocal</h2>
+    <p class="sub">Uses your browser's microphone — nothing is captured until you press record. Record in as many takes as you like, trim each one, set the gap before it, reorder them, and preview the whole arrangement before uploading anything. Any single take auto-stops at 8 minutes.</p>
     <div class="rec-panel">
       <div class="rec-main">
         <button class="rec-btn" id="rec-btn" aria-label="Record"><span class="dot"></span></button>
         <div class="rec-info">
-          <b id="rec-title">Press record to start</b>
-          <span id="rec-sub">The beat plays automatically so you can perform along with it.</span>
+          <b id="rec-title">Press record to capture a take</b>
+          <span id="rec-sub">Generate a beat above first, or record straight over the default groove.</span>
         </div>
         <div class="rec-timer" id="rec-timer">0:00</div>
       </div>
       <div class="progress" id="rec-progress"><i></i></div>
       <div class="rec-status" id="rec-status"></div>
+
+      <div class="takes-list" id="takes-list"></div>
+
+      <div class="mixer-actions" id="workspace-actions" style="display:none">
+        <button class="btn-ghost" id="preview-arrangement-btn">Preview full arrangement</button>
+        <button class="btn-primary" id="use-arrangement-btn">Use this arrangement</button>
+      </div>
+
+      <div class="section-label" id="vocalfx-label" style="display:none">Clean up your vocal</div>
+      <div class="mix-panel" id="vocalfx-panel" style="display:none">
+        <label class="fx-toggle"><input type="checkbox" id="fx-autotrim" checked> Auto-trim leading silence <span class="hint">— trims dead air before you start talking/singing</span></label>
+        <label class="fx-toggle"><input type="checkbox" id="fx-gate"> Noise gate <span class="hint">— quiets room noise between phrases</span></label>
+        <label class="fx-toggle"><input type="checkbox" id="fx-deess"> De-esser <span class="hint">— tames harsh "S"/"T" sounds</span></label>
+        <div class="ctrl-row">
+          <label>Fade in</label>
+          <input type="range" id="fx-fadein" min="0" max="2" step="0.05" value="0.05">
+          <span class="val" id="fx-fadein-val">0.05s</span>
+        </div>
+        <div class="ctrl-row">
+          <label>Fade out</label>
+          <input type="range" id="fx-fadeout" min="0" max="3" step="0.05" value="0.3">
+          <span class="val" id="fx-fadeout-val">0.3s</span>
+        </div>
+      </div>
 
       <div class="result" id="result">
         <div class="deck" id="deck-result">
@@ -357,8 +435,105 @@ function makeDeck(name, data){
 
 const demoDeck = makeDeck("demo", DEMO);
 
-// ---- record + upload + poll ----
+// ---- a minimal play/scrub-only deck, no A/B toggle - for the generated
+// beat preview, which is one clip, not a before/after pair. ----
+function makeSimpleDeck(name, src){
+  const audio = new Audio(src);
+  audio.loop = true;
+  const playBtn = document.querySelector('.play-btn[data-deck="' + name + '"]');
+  const scrub = document.querySelector('.scrub[data-deck="' + name + '"]');
+  const scrubFill = scrub.querySelector(".scrub-fill");
+  const timeEl = document.querySelector('.time[data-deck="' + name + '"]');
+  playBtn.addEventListener("click", () => { audio.paused ? audio.play() : audio.pause(); });
+  audio.addEventListener("play", () => { playBtn.querySelector("svg").innerHTML = '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>'; });
+  audio.addEventListener("pause", () => { playBtn.querySelector("svg").innerHTML = '<path d="M8 5v14l11-7z"/>'; });
+  audio.addEventListener("timeupdate", () => {
+    const d = audio.duration || 0;
+    scrubFill.style.width = (d ? (audio.currentTime/d)*100 : 0) + "%";
+    timeEl.textContent = fmtTime(audio.currentTime);
+  });
+  scrub.addEventListener("click", (e) => {
+    const rect = scrub.getBoundingClientRect();
+    audio.currentTime = ((e.clientX - rect.left) / rect.width) * (audio.duration || 0);
+  });
+  return { audio, setSrc(src){ const wasPlaying = !audio.paused; audio.src = src; if (wasPlaying) audio.play(); } };
+}
+
+// ---- beat generation (genre + tempo -> a real generated pattern) ----
 const sessionId = "bs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+const GENRE_DEFAULT_BPM = { trap: 140, lofi: 80, boombap: 90, pop: 120, afrobeat: 105, house: 128 };
+let currentBeat = { genre: "boombap", bpm: 90 };
+let beatReady = false;
+let beatgenDeck = null;
+
+const generateBtn = document.getElementById("generate-btn");
+const beatgenStatus = document.getElementById("beatgen-status");
+const bpmSlider = document.getElementById("bpm-slider");
+const bpmVal = document.getElementById("bpm-val");
+
+function setBeatgenStatus(msg, cls){ beatgenStatus.textContent = msg || ""; beatgenStatus.style.color = cls === "err" ? "var(--ember)" : cls === "ok" ? "var(--hot)" : ""; }
+
+document.querySelectorAll(".genre-chip").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".genre-chip").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentBeat.genre = btn.dataset.genre;
+    currentBeat.bpm = GENRE_DEFAULT_BPM[currentBeat.genre];
+    bpmSlider.value = currentBeat.bpm;
+    bpmVal.textContent = currentBeat.bpm + " BPM";
+  });
+});
+bpmSlider.addEventListener("input", () => {
+  currentBeat.bpm = Number(bpmSlider.value);
+  bpmVal.textContent = currentBeat.bpm + " BPM";
+});
+
+generateBtn.addEventListener("click", async () => {
+  generateBtn.disabled = true;
+  setBeatgenStatus("Generating your beat...");
+  try {
+    const res = await fetch(API + "/beat?session=" + sessionId, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ genre: currentBeat.genre, bpm: currentBeat.bpm, bars: 4 }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    pollBeatStatus();
+  } catch (e) {
+    setBeatgenStatus("Couldn't generate: " + e.message, "err");
+    generateBtn.disabled = false;
+  }
+});
+
+function pollBeatStatus(){
+  const iv = setInterval(async () => {
+    let data;
+    try { const res = await fetch(API + "/status?session=" + sessionId); data = await res.json(); } catch (e) { return; }
+    if (data.status === "processing" || data.status === "beat_requested") {
+      setBeatgenStatus("Generating your beat...");
+    } else if (data.status === "beat_ready") {
+      clearInterval(iv);
+      beatReady = true;
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Generate another beat";
+      setBeatgenStatus("Ready — press play to preview.", "ok");
+      document.getElementById("deck-beatgen").classList.add("on");
+      const url = data.beat_url + "?v=" + Date.now();
+      if (!beatgenDeck) beatgenDeck = makeSimpleDeck("beatgen", url);
+      else beatgenDeck.setSrc(url);
+      recSub.textContent = "Your " + data.genre + " beat plays while you perform.";
+    } else if (data.status === "error") {
+      clearInterval(iv);
+      setBeatgenStatus("Something went wrong: " + (data.message || "unknown error"), "err");
+      generateBtn.disabled = false;
+    }
+  }, 2000);
+}
+
+// ---- record in bits: each press-record/press-stop cycle becomes one
+// "take" card (trim/gap/reorder/preview/delete), not an immediate upload -
+// see PLAN2.md's recording-workspace architecture note. ----
 const recBtn = document.getElementById("rec-btn");
 const recTitle = document.getElementById("rec-title");
 const recSub = document.getElementById("rec-sub");
@@ -367,6 +542,10 @@ const recStatus = document.getElementById("rec-status");
 const recProgress = document.getElementById("rec-progress");
 const resultBox = document.getElementById("result");
 const mixerBox = document.getElementById("mixer");
+const takesList = document.getElementById("takes-list");
+const workspaceActions = document.getElementById("workspace-actions");
+const vocalfxLabel = document.getElementById("vocalfx-label");
+const vocalfxPanel = document.getElementById("vocalfx-panel");
 
 let mediaRecorder = null;
 let chunks = [];
@@ -374,7 +553,34 @@ let timerInterval = null;
 let elapsed = 0;
 const MAX_SECONDS = 480; // verified safe on the production box up to 8 minutes - see PLAN.md
 
+let takes = []; // {blob, url, duration, trimStart, trimEnd, gapBefore}
+
 function setStatus(msg, cls){ recStatus.textContent = msg || ""; recStatus.className = "rec-status" + (cls ? " " + cls : ""); }
+function fmtSec(s){ return Number(s).toFixed(2) + "s"; }
+function playbackDeck(){ return beatReady && beatgenDeck ? beatgenDeck : demoDeck; }
+
+// MediaRecorder blobs (esp. webm/opus in Chrome) commonly report
+// duration=Infinity until something forces a real duration computation -
+// a well-known browser quirk, not a bug here. Seeking near the end and
+// waiting for timeupdate is the standard workaround.
+function getBlobDuration(url){
+  return new Promise((resolve) => {
+    const a = new Audio();
+    a.preload = "metadata";
+    a.src = url;
+    a.addEventListener("loadedmetadata", () => {
+      if (a.duration === Infinity || isNaN(a.duration)) {
+        a.currentTime = 1e101;
+        a.addEventListener("timeupdate", function handler(){
+          a.removeEventListener("timeupdate", handler);
+          resolve(a.duration === Infinity || isNaN(a.duration) ? 0 : a.duration);
+        });
+      } else {
+        resolve(a.duration);
+      }
+    });
+  });
+}
 
 recBtn.addEventListener("click", async () => {
   if (mediaRecorder && mediaRecorder.state === "recording") { mediaRecorder.stop(); return; }
@@ -393,18 +599,19 @@ recBtn.addEventListener("click", async () => {
   mediaRecorder.addEventListener("dataavailable", (e) => { if (e.data.size > 0) chunks.push(e.data); });
   mediaRecorder.addEventListener("stop", () => {
     stream.getTracks().forEach(t => t.stop());
-    demoDeck.audio.pause();
+    playbackDeck().audio.pause();
     clearInterval(timerInterval);
     recBtn.classList.remove("recording");
-    recTitle.textContent = "Press record to start";
-    recSub.textContent = "The beat plays automatically so you can perform along with it.";
-    uploadRecording();
+    recTitle.textContent = "Press record to capture a take";
+    recSub.textContent = beatReady ? "Your " + currentBeat.genre + " beat plays while you perform." : "Generate a beat above first, or record straight over the default groove.";
+    finalizeTake();
   });
 
   mediaRecorder.start();
-  demoDeck.audio.currentTime = 0;
-  demoDeck.audio.loop = true;
-  demoDeck.audio.play().catch(() => {});
+  const deck = playbackDeck();
+  deck.audio.currentTime = 0;
+  deck.audio.loop = true;
+  deck.audio.play().catch(() => {});
   recBtn.classList.add("recording");
   recTitle.textContent = "Recording — press again to stop";
   recSub.textContent = "Perform along with the beat playing now.";
@@ -417,25 +624,124 @@ recBtn.addEventListener("click", async () => {
   }, 1000);
 });
 
-async function uploadRecording(){
+async function finalizeTake(){
   const blob = new Blob(chunks, { type: (mediaRecorder && mediaRecorder.mimeType) || "audio/webm" });
   if (blob.size === 0) { setStatus("No audio was captured — try recording again.", "err"); return; }
-  setStatus("Uploading your recording...");
+  const url = URL.createObjectURL(blob);
+  const duration = await getBlobDuration(url);
+  if (duration <= 0) { setStatus("That take came out empty — try recording again.", "err"); return; }
+  takes.push({ blob, url, duration, trimStart: 0, trimEnd: duration, gapBefore: takes.length === 0 ? 0 : 0.3 });
+  renderTakes();
+  setStatus("Take " + takes.length + " captured (" + fmtTime(duration) + "). Record another, or use this arrangement below.", "ok");
+}
+
+function renderTakes(){
+  takesList.innerHTML = "";
+  takes.forEach((t, i) => {
+    const card = document.createElement("div");
+    card.className = "take-card";
+    card.innerHTML =
+      '<div class="take-head"><b>Take ' + (i + 1) + '</b><span class="take-dur">' + fmtTime(t.duration) + '</span>' +
+      '<div class="take-tools">' +
+        '<button type="button" data-action="up" ' + (i === 0 ? "disabled" : "") + ' aria-label="Move up">&uarr;</button>' +
+        '<button type="button" data-action="down" ' + (i === takes.length - 1 ? "disabled" : "") + ' aria-label="Move down">&darr;</button>' +
+        '<button type="button" data-action="preview" aria-label="Preview">&#9654;</button>' +
+        '<button type="button" data-action="delete" aria-label="Delete">&#10005;</button>' +
+      '</div></div>' +
+      '<div class="ctrl-row"><label>Trim start</label><input type="range" data-param="trimStart" min="0" max="' + t.duration + '" step="0.05" value="' + t.trimStart + '"><span class="val" data-readout="trimStart">' + fmtSec(t.trimStart) + '</span></div>' +
+      '<div class="ctrl-row"><label>Trim end</label><input type="range" data-param="trimEnd" min="0" max="' + t.duration + '" step="0.05" value="' + t.trimEnd + '"><span class="val" data-readout="trimEnd">' + fmtSec(t.trimEnd) + '</span></div>' +
+      (i > 0 ? '<div class="ctrl-row"><label>Gap before</label><input type="range" data-param="gapBefore" min="0" max="5" step="0.1" value="' + t.gapBefore + '"><span class="val" data-readout="gapBefore">' + fmtSec(t.gapBefore) + '</span></div>' : "");
+
+    card.querySelectorAll("input[data-param]").forEach(input => {
+      input.addEventListener("input", () => {
+        const param = input.dataset.param;
+        let v = Number(input.value);
+        if (param === "trimStart" && v >= t.trimEnd) v = Math.max(0, t.trimEnd - 0.05);
+        if (param === "trimEnd" && v <= t.trimStart) v = t.trimStart + 0.05;
+        t[param] = v;
+        card.querySelector('[data-readout="' + param + '"]').textContent = fmtSec(v);
+      });
+    });
+    card.querySelector('[data-action="up"]').addEventListener("click", () => { if (i > 0) { [takes[i-1], takes[i]] = [takes[i], takes[i-1]]; renderTakes(); } });
+    card.querySelector('[data-action="down"]').addEventListener("click", () => { if (i < takes.length - 1) { [takes[i+1], takes[i]] = [takes[i], takes[i+1]]; renderTakes(); } });
+    card.querySelector('[data-action="preview"]').addEventListener("click", () => { new Audio(t.url).play().catch(() => {}); });
+    card.querySelector('[data-action="delete"]').addEventListener("click", () => {
+      URL.revokeObjectURL(t.url);
+      takes.splice(i, 1);
+      renderTakes();
+    });
+    takesList.appendChild(card);
+  });
+
+  const has = takes.length > 0;
+  workspaceActions.style.display = has ? "" : "none";
+  vocalfxLabel.style.display = has ? "" : "none";
+  vocalfxPanel.style.display = has ? "" : "none";
+}
+
+// Plays the whole arrangement (trims + gaps) entirely client-side via the
+// Web Audio API, before anything is ever uploaded - the "hear it together
+// first" step PLAN2.md calls for.
+let previewCtx = null;
+document.getElementById("preview-arrangement-btn").addEventListener("click", async () => {
+  if (takes.length === 0) return;
+  if (previewCtx) { try { previewCtx.close(); } catch (e) {} }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  previewCtx = ctx;
+  let t = ctx.currentTime + 0.15;
+  for (const take of takes) {
+    const buf = await ctx.decodeAudioData(await take.blob.arrayBuffer());
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    const dur = Math.max(0.01, take.trimEnd - take.trimStart);
+    t += take.gapBefore;
+    src.start(t, take.trimStart, dur);
+    t += dur;
+  }
+});
+
+function collectFx(){
+  return {
+    fadeIn: Number(document.getElementById("fx-fadein").value),
+    fadeOut: Number(document.getElementById("fx-fadeout").value),
+    autotrim: document.getElementById("fx-autotrim").checked,
+    gate: document.getElementById("fx-gate").checked,
+    deess: document.getElementById("fx-deess").checked,
+  };
+}
+wireSlider(document.getElementById("fx-fadein"), v => Number(v).toFixed(2) + "s");
+wireSlider(document.getElementById("fx-fadeout"), v => Number(v).toFixed(2) + "s");
+
+document.getElementById("use-arrangement-btn").addEventListener("click", async () => {
+  if (takes.length === 0) { setStatus("Record at least one take first.", "err"); return; }
+  document.getElementById("use-arrangement-btn").disabled = true;
+  setStatus("Uploading your takes...");
   recProgress.classList.add("on");
   try {
-    const res = await fetch(API + "/upload?session=" + sessionId, {
-      method: "POST",
-      headers: { "Content-Type": blob.type },
-      body: blob,
+    for (let i = 0; i < takes.length; i++) {
+      const res = await fetch(API + "/take?session=" + sessionId + "&index=" + i, {
+        method: "POST", headers: { "Content-Type": takes[i].blob.type || "audio/webm" }, body: takes[i].blob,
+      });
+      if (!res.ok) throw new Error("take " + (i + 1) + " upload failed");
+    }
+    const manifest = {
+      takes: takes.map((t, i) => ({ index: i, trimStart: t.trimStart, trimEnd: t.trimEnd, gapBefore: t.gapBefore })),
+      fx: collectFx(),
+    };
+    const res2 = await fetch(API + "/assemble?session=" + sessionId, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(manifest),
     });
-    if (!res.ok) throw new Error("upload failed");
+    const data2 = await res2.json();
+    if (!res2.ok) throw new Error(data2.error || "assemble failed");
     setStatus("Uploaded. Mixing and mastering your track now — this usually takes under a couple of minutes...");
     pollStatus(false);
   } catch (e) {
     recProgress.classList.remove("on");
-    setStatus("Upload failed — check your connection and try again.", "err");
+    setStatus("Upload failed: " + e.message, "err");
+    document.getElementById("use-arrangement-btn").disabled = false;
   }
-}
+});
 
 let resultDeck = null;
 function pollStatus(isRerender){

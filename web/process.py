@@ -1,9 +1,17 @@
 """beatstudio processing worker - run via cron every minute.
 
-Two job types, distinguished by session status:
-  "uploaded"            -> full pipeline: decode -> init project -> beat-render
-                           -> track-import vocal -> mix (default levels) ->
-                           preview -> master (PAID, first time only).
+Job types, distinguished by session status:
+  "beat_requested"      -> free, no wallet involved: generate + beat-render
+                           + preview just the beat (beat.json's genre/bpm/
+                           bars), so a visitor can hear/regenerate it BEFORE
+                           committing to record - PLAN2.md Phase C.
+  "uploaded"             -> full pipeline: assemble takes (if a recording-
+                           workspace manifest.json is present) or decode the
+                           legacy single upload -> init project -> generate
+                           the beat -> track-import vocal -> voice-edit
+                           (fade/autotrim/gate/de-ess, if requested) -> mix
+                           (default levels) -> preview -> master (PAID,
+                           first time only).
   "rerender_requested"  -> lighter job: mix (new gain/pan/mute) -> preview ->
                            remaster (FREE - beatstudio.lz only charges the
                            wallet once per project, see beatstudio.lz's
@@ -11,9 +19,10 @@ Two job types, distinguished by session status:
                            compressor/loudness settings. Reuses the beat/
                            vocal tracks already rendered by the first pass -
                            no re-decode, no re-synthesis.
-Both drop results where Apache serves them as static files.
+All drop results where Apache serves them as static files.
 """
 import fcntl
+import glob
 import json
 import os
 import shutil
@@ -27,32 +36,12 @@ RESULTS_DIR = "/var/www/larzos/beatstudio/results"
 BEATSTUDIO = ["larzscript", os.path.join(APP_DIR, "beatstudio.lz")]
 LOCK_PATH = "/opt/beatstudio/.process.lock"
 
-# Same bpm/patterns as the demo beat on the page, so vocals line up with
-# what the visitor heard while recording. An 8-bar arrangement (intro ->
-# main groove x4 -> fill -> main), not one bar looped identically - real
-# dynamics. Bar-level pattern editing isn't exposed on the page (yet) -
-# this pass exposes the mixer (per-track gain/pan/mute) and the full
-# master chain (EQ/compressor/loudness) as real controls instead.
-BPM = "140"
-MAIN_STEPS = [
-    ("kick", 0), ("kick", 6), ("kick", 8), ("kick", 11),
-    ("snare", 4), ("snare", 12),
-    ("clap", 4), ("clap", 12),
-    ("hihat", 0), ("hihat", 2), ("hihat", 4), ("hihat", 6),
-    ("hihat", 8), ("hihat", 10), ("hihat", 12), ("hihat", 14), ("hihat", 15),
-]
-NAMED_STEPS = [
-    ("intro", "kick", 0), ("intro", "hihat", 0), ("intro", "hihat", 4),
-    ("intro", "hihat", 8), ("intro", "hihat", 12),
-    ("fill", "kick", 0), ("fill", "kick", 3), ("fill", "kick", 6), ("fill", "kick", 8),
-    ("fill", "kick", 10), ("fill", "kick", 12), ("fill", "kick", 14),
-    ("fill", "snare", 4), ("fill", "snare", 12),
-    ("fill", "hihat", 0), ("fill", "hihat", 1), ("fill", "hihat", 2), ("fill", "hihat", 3),
-    ("fill", "hihat", 4), ("fill", "hihat", 5), ("fill", "hihat", 6), ("fill", "hihat", 7),
-    ("fill", "hihat", 8), ("fill", "hihat", 9), ("fill", "hihat", 10), ("fill", "hihat", 11),
-    ("fill", "hihat", 12), ("fill", "hihat", 13), ("fill", "hihat", 14), ("fill", "hihat", 15),
-]
-ARRANGEMENT = "intro*2,main*4,fill,main"
+# Used whenever a session has no beat.json (e.g. an old client, or a
+# visitor who hits record before ever calling /api/beat) - a fixed,
+# always-available fallback rather than a hard failure. bars=4 matches
+# the arrangement length ("intro*2,main*4,fill,main*2,outro") the
+# original hand-authored demo beat used.
+DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1}
 
 DEFAULT_PARAMS = {
     "tracks": {
@@ -88,6 +77,72 @@ def load_params(d):
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return DEFAULT_PARAMS
+
+
+def load_beat(d):
+    path = os.path.join(d, "beat.json")
+    if not os.path.exists(path):
+        return DEFAULT_BEAT
+    try:
+        with open(path) as f:
+            b = json.load(f)
+        return {"genre": b.get("genre", DEFAULT_BEAT["genre"]), "bpm": b.get("bpm", DEFAULT_BEAT["bpm"]),
+                "bars": b.get("bars", DEFAULT_BEAT["bars"]), "seed": b.get("seed", DEFAULT_BEAT["seed"])}
+    except (json.JSONDecodeError, OSError):
+        return DEFAULT_BEAT
+
+
+def generate_beat(project, beat, timeout=120):
+    return run(BEATSTUDIO + ["generate", beat["genre"], "--bpm=" + str(beat["bpm"]),
+                              "--bars=" + str(beat["bars"]), "--seed=" + str(beat["seed"]),
+                              "--file=" + project], timeout=timeout)
+
+
+def find_take_file(d, index):
+    for path in glob.glob(os.path.join(d, "take_%d_raw.*" % index)):
+        return path
+    return None
+
+
+# Assembles a manifest's takes (each independently trimmed, with a gap of
+# silence before it) into ONE continuous mono 22050Hz WAV via ffmpeg -
+# exactly the disclosed "format/container handling only" role ffmpeg
+# already plays elsewhere in this app (decode_to_wav in beatstudio.lz);
+# the actual audio EDITING (fade/autotrim/gate/de-ess) happens afterward,
+# through voice-edit's real Larzscript DSP, never through an ffmpeg audio
+# filter - see PLAN2.md's Phase B architecture note for why that split
+# matters here.
+def assemble_takes(d, manifest, out_path, log_prefix):
+    takes = manifest["takes"]
+    inputs = []
+    filter_parts = []
+    concat_labels = []
+    for i, t in enumerate(takes):
+        src = find_take_file(d, t["index"])
+        if src is None:
+            return "take %d file missing on disk" % t["index"]
+        inputs += ["-i", src]
+        input_idx = len(inputs) // 2 - 1
+        dur = t["trimEnd"] - t["trimStart"]
+        if t["gapBefore"] > 0:
+            glabel = "g%d" % i
+            filter_parts.append("anullsrc=r=22050:cl=mono:d=%.3f[%s]" % (t["gapBefore"], glabel))
+            concat_labels.append(glabel)
+        alabel = "a%d" % i
+        filter_parts.append(
+            "[%d:a]atrim=start=%.3f:duration=%.3f,asetpts=PTS-STARTPTS,"
+            "aresample=22050,aformat=channel_layouts=mono[%s]" % (input_idx, t["trimStart"], dur, alabel))
+        concat_labels.append(alabel)
+
+    filter_complex = ";".join(filter_parts) + ";" + "".join("[%s]" % l for l in concat_labels) + \
+        "concat=n=%d:v=0:a=1[out]" % len(concat_labels)
+    cmd = ["ffmpeg", "-y", "-loglevel", "error"] + inputs + [
+        "-filter_complex", filter_complex, "-map", "[out]",
+        "-ac", "1", "-ar", "22050", "-acodec", "pcm_s16le", out_path]
+    p = run(cmd, timeout=300)
+    if p.returncode != 0 or not os.path.exists(out_path):
+        return "ffmpeg assembly failed: " + (p.stdout[-800:] if p.stdout else "")
+    return None
 
 
 def apply_mix(project, params, log_prefix, d):
@@ -149,38 +204,84 @@ def publish_results(project, d, session_id):
                  peak_dbfs=masters[-1]["peak_dbfs"])
 
 
+def process_beat_requested(session_id, d):
+    write_status(d, "processing")
+    beat = load_beat(d)
+    project = os.path.join(d, "project.json")
+    p = run(BEATSTUDIO + ["init", "--budget=0", "--file=" + project])
+    if p.returncode != 0:
+        write_status(d, "error", message="init failed", detail=p.stdout[-800:])
+        return
+    p = generate_beat(project, beat)
+    if p.returncode != 0:
+        write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
+        return
+    p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
+    if p.returncode != 0:
+        write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
+        return
+    p = run(BEATSTUDIO + ["preview", "--file=" + project], timeout=120)
+    if p.returncode != 0:
+        write_status(d, "error", message="beat preview failed", detail=p.stdout[-800:])
+        return
+
+    out_dir = os.path.join(RESULTS_DIR, session_id)
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copyfile(os.path.join(d, "preview.wav"), os.path.join(out_dir, "beat_preview.wav"))
+    os.chmod(os.path.join(out_dir, "beat_preview.wav"), 0o644)
+    write_status(d, "beat_ready", beat_url="/beatstudio/results/" + session_id + "/beat_preview.wav",
+                 genre=beat["genre"], bpm=beat["bpm"])
+
+
 def process_uploaded(session_id, d):
+    # Read whatever the "uploaded" status carried (legacy single-shot
+    # uploads stash raw_ext there) BEFORE write_status()'s first call
+    # below overwrites status.json wholesale - a real bug caught during
+    # testing: write_status() replaces the whole payload (status +
+    # updated_at + only whatever `extra` THIS call passes), so calling it
+    # first silently erased raw_ext, and the legacy fallback path always
+    # went looking for the wrong file extension afterward.
     status_path = os.path.join(d, "status.json")
     with open(status_path) as f:
-        st = json.load(f)
-    ext = st.get("raw_ext", "webm")
-    raw_path = os.path.join(d, "vocal_raw." + ext)
-    if not os.path.exists(raw_path):
-        write_status(d, "error", message="no uploaded audio found")
-        return
+        raw_ext = json.load(f).get("raw_ext", "webm")
 
     write_status(d, "processing")
 
     vocal_wav = os.path.join(d, "vocal_upload.wav")
-    p = run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw_path, "-ac", "1", "-ar", "22050",
-             "-acodec", "pcm_s16le", vocal_wav])
-    if p.returncode != 0 or not os.path.exists(vocal_wav):
-        write_status(d, "error", message="couldn't decode the recording", detail=p.stdout[-800:] if p.stdout else "")
-        return
+    manifest_path = os.path.join(d, "manifest.json")
+    fx = None
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        fx = manifest["fx"]
+        err = assemble_takes(d, manifest, vocal_wav, "assemble")
+        if err:
+            write_status(d, "error", message="couldn't assemble your takes", detail=err)
+            return
+    else:
+        # Legacy single-shot recording (no recording-workspace manifest) -
+        # still supported so an in-flight session started against an
+        # older page version doesn't just break mid-flow.
+        raw_path = os.path.join(d, "vocal_raw." + raw_ext)
+        if not os.path.exists(raw_path):
+            write_status(d, "error", message="no uploaded audio found")
+            return
+        p = run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw_path, "-ac", "1", "-ar", "22050",
+                 "-acodec", "pcm_s16le", vocal_wav])
+        if p.returncode != 0 or not os.path.exists(vocal_wav):
+            write_status(d, "error", message="couldn't decode the recording", detail=p.stdout[-800:] if p.stdout else "")
+            return
 
+    beat = load_beat(d)
     project = os.path.join(d, "project.json")
-    p = run(BEATSTUDIO + ["init", "--budget=1000", "--bpm=" + BPM, "--file=" + project])
+    p = run(BEATSTUDIO + ["init", "--budget=1000", "--file=" + project])
     if p.returncode != 0:
         write_status(d, "error", message="init failed", detail=p.stdout[-800:])
         return
 
-    for voice, step in MAIN_STEPS:
-        run(BEATSTUDIO + ["step", voice, str(step), "on", "--file=" + project])
-    for pattern, voice, step in NAMED_STEPS:
-        run(BEATSTUDIO + ["pattern-step", pattern, voice, str(step), "on", "--file=" + project])
-    p = run(BEATSTUDIO + ["arrange", ARRANGEMENT, "--file=" + project])
+    p = generate_beat(project, beat)
     if p.returncode != 0:
-        write_status(d, "error", message="arrangement failed", detail=p.stdout[-800:])
+        write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
         return
 
     p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
@@ -192,6 +293,19 @@ def process_uploaded(session_id, d):
     if p.returncode != 0:
         write_status(d, "error", message="couldn't add your recording as a track", detail=p.stdout[-800:])
         return
+
+    if fx and (fx["fadeIn"] > 0 or fx["fadeOut"] > 0 or fx["autotrim"] or fx["gate"] or fx["deess"]):
+        edit_flags = ["--fade-in=" + str(fx["fadeIn"]), "--fade-out=" + str(fx["fadeOut"])]
+        if fx["autotrim"]:
+            edit_flags.append("--autotrim")
+        if fx["gate"]:
+            edit_flags.append("--gate")
+        if fx["deess"]:
+            edit_flags.append("--deess")
+        p = run(BEATSTUDIO + ["voice-edit", "vocal"] + edit_flags + ["--file=" + project], timeout=300)
+        if p.returncode != 0:
+            write_status(d, "error", message="voice editing failed", detail=p.stdout[-800:])
+            return
 
     params = DEFAULT_PARAMS
     if apply_mix(project, params, "initial mix", d) is not None:
@@ -229,13 +343,15 @@ def main():
         except Exception:
             continue
         status = st.get("status")
-        if status not in ("uploaded", "rerender_requested"):
+        if status not in ("uploaded", "rerender_requested", "beat_requested"):
             continue
         try:
             if status == "uploaded":
                 process_uploaded(session_id, d)
-            else:
+            elif status == "rerender_requested":
                 process_rerender(session_id, d)
+            else:
+                process_beat_requested(session_id, d)
         except Exception as e:
             write_status(d, "error", message="unexpected error: " + str(e))
 
