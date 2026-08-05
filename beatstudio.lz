@@ -1343,7 +1343,11 @@ fn cmd_voice_edit(a) {
 # memory cost instead of silently risking the OOM this file's own header
 # comment measured on the production box (~110 bytes/list element) -
 # 180s is a real, calibrated margin under 1.9GB, not an arbitrary number.
-let DOUBLE_MAX_SECONDS = 180.0
+# Shared by `double` AND PLAN4.md Phase J's `autotune` below - both are
+# whole-buffer for the same reason (a real time-domain pitch algorithm,
+# PSOLA included, needs continuous context; chunking either without care
+# introduces real audible discontinuities at chunk boundaries).
+let WHOLE_TRACK_MAX_SECONDS = 180.0
 
 fn cmd_double(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
@@ -1354,9 +1358,9 @@ fn cmd_double(a) {
   if idx < 0 { fail("no track named '" + name + "'") }
   let track = p["tracks"][idx]
   let duration_s = track["total_samples"] / float(SAMPLE_RATE)
-  if duration_s > DOUBLE_MAX_SECONDS {
+  if duration_s > WHOLE_TRACK_MAX_SECONDS {
     fail("'" + name + "' is " + str(round(duration_s, 1)) + "s - double/harmony only supports up to " +
-         str(DOUBLE_MAX_SECONDS) + "s clips (it needs the whole track in memory at once, unlike the " +
+         str(WHOLE_TRACK_MAX_SECONDS) + "s clips (it needs the whole track in memory at once, unlike the " +
          "chunked-streaming mix/master path - see this command's own comment for why)")
   }
   # Default 0.15 semitones (~15 cents): a natural "quick double" thickening
@@ -1391,6 +1395,157 @@ fn cmd_double(a) {
   save_project(path, p)
   print(new_name + ": " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path +
         " (" + str(semitones) + " semitones from '" + name + "', pitch+tempo both shifted)")
+}
+
+# ---- real pitch correction / "autotune" (PLAN4.md Phase J) ------------
+# Real TD-PSOLA - genuinely shifts pitch WITHOUT changing tempo, unlike
+# `double` above's resample trick (which changes both, disclosed there as
+# a real, cheaper-technique limitation). No FFT anywhere - dsp still has
+# none - autocorrelation pitch detection + pitch-synchronous overlap-add
+# resynthesis are the standard NON-FFT techniques real pitch-correction
+# tools use. Both new native builtins
+# (_native_detect_pitch_track/_native_psola_shift) went through 3 real,
+# measured bugs before landing on a correct implementation - see their
+# own comments in native/larzscript.c for the full story (grains placed
+# at the wrong spacing left silent gaps; grains that read from and wrote
+# to the same position provably can't change anything; the pitch
+# detector itself had a classic octave-down subharmonic bug). Every fix
+# was found via actually re-detecting pitch on the output and comparing
+# against an independently-computed expected value, not by trusting the
+# construction - the same discipline this file's own comments have
+# documented since Phase E's note_freq bugs.
+
+let AUTOTUNE_MIN_FREQ = 70.0
+let AUTOTUNE_MAX_FREQ = 800.0
+let AUTOTUNE_FRAME_SIZE = 1024
+let AUTOTUNE_HOP_SIZE = 512
+
+# Real scale intervals (semitones above the scale's own root) for the
+# optional --scale= lock. Default (no --scale given) is fully chromatic -
+# any semitone counts as "in tune" - the least surprising default for a
+# general "fix my pitch" request; scale-lock is an opt-in for someone who
+# specifically wants only a chosen key's notes considered correct.
+let SCALES = {
+  "major": [0, 2, 4, 5, 7, 9, 11],
+  "minor": [0, 2, 3, 5, 7, 8, 10],
+}
+
+fn semitone_in_scale(s, key_root, scale_intervals) {
+  let rel = s - key_root
+  let octave = floor(rel / 12.0)
+  let within = int(rel - octave * 12.0)
+  return within in scale_intervals
+}
+
+# Finds the nearest allowed note to `freq` by real musical (ratio)
+# distance, not raw Hz difference - a linear scan over a fixed +/-40
+# semitone window around A4 (comfortably covers the whole
+# AUTOTUNE_MIN_FREQ..AUTOTUNE_MAX_FREQ vocal range) since this
+# interpreter has no log()/log2() to compute "how many semitones is this
+# frequency from A4" directly - reusing note_freq's own forward
+# semitones->frequency mapping and searching is simpler and exact, not
+# an approximation.
+fn nearest_note_freq(freq, key_root, scale_intervals) {
+  let best_dist = 1000000000.0
+  let best_freq = freq
+  let s = -40
+  while s <= 20 {
+    let allowed = scale_intervals == nil or semitone_in_scale(s, key_root, scale_intervals)
+    if allowed {
+      let cand = midi_freq(s)
+      let dist = cand > freq ? cand / freq : freq / cand
+      if dist < best_dist { best_dist = dist; best_freq = cand }
+    }
+    s = s + 1
+  }
+  return best_freq
+}
+
+fn cmd_autotune(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 {
+    fail("usage: autotune NAME --strength=0..1 [--key=SEMITONES-FROM-A4] [--scale=major|minor]")
+  }
+  let name = a["positional"][0]
+  let p = load_project(path)
+  let idx = find_track(p, name)
+  if idx < 0 { fail("no track named '" + name + "'") }
+  let track = p["tracks"][idx]
+  let duration_s = track["total_samples"] / float(SAMPLE_RATE)
+  if duration_s > WHOLE_TRACK_MAX_SECONDS {
+    fail("'" + name + "' is " + str(round(duration_s, 1)) + "s - autotune only supports up to " +
+         str(WHOLE_TRACK_MAX_SECONDS) + "s clips (it needs the whole track in memory at once, unlike the " +
+         "chunked-streaming mix/master path - see WHOLE_TRACK_MAX_SECONDS' own comment for why)")
+  }
+
+  # strength=0 (default) is a true no-op, not "very gentle correction" -
+  # 0 skips the whole pitch-detect/PSOLA pass entirely rather than
+  # running it and multiplying by zero, so a project that never asks for
+  # autotune pays nothing extra. Low values (~0.2-0.4) read as natural
+  # correction; 1.0 is the instant, no-smoothing hard-snap effect - one
+  # slider genuinely covers both, per how this was scoped.
+  let strength = float(argmod.flag(a, "strength", "0"))
+  if strength < 0.0 { strength = 0.0 }
+  if strength > 1.0 { strength = 1.0 }
+  if strength <= 0.0 {
+    print(name + ": strength 0 - no correction applied")
+    return
+  }
+
+  let key_root = int(argmod.flag(a, "key", "0"))
+  let scale_name = argmod.flag(a, "scale", nil)
+  let scale_intervals = nil
+  if scale_name != nil {
+    if not SCALES.has(scale_name) { fail("unknown scale '" + scale_name + "' - choices: major, minor") }
+    scale_intervals = SCALES[scale_name]
+  }
+
+  let samples = track_read(track, 0, track["total_samples"])
+  let pitch_track = _native_detect_pitch_track(samples, SAMPLE_RATE, AUTOTUNE_MIN_FREQ, AUTOTUNE_MAX_FREQ, AUTOTUNE_FRAME_SIZE, AUTOTUNE_HOP_SIZE)
+
+  let periods = []
+  let ratios = []
+  let corrected_frames = 0
+  for f in pitch_track {
+    periods.push(f["period"])
+    if f["voiced"] {
+      let detected_freq = SAMPLE_RATE / float(f["period"])
+      let target_freq = nearest_note_freq(detected_freq, key_root, scale_intervals)
+      let target_ratio = target_freq / detected_freq
+      let applied = 1.0 + (target_ratio - 1.0) * strength
+      ratios.push(applied)
+      if applied != 1.0 { corrected_frames = corrected_frames + 1 }
+    } else {
+      # Unvoiced (silence/noise/consonants) - never chase a pitch there,
+      # matches _native_psola_shift's own documented contract that
+      # ratio=1.0 reproduces that region exactly.
+      ratios.push(1.0)
+    }
+  }
+
+  let tuned = _native_psola_shift(samples, periods, ratios, AUTOTUNE_HOP_SIZE)
+
+  # Same read-while-writing collision voice_edit's own header comment
+  # documents and fixes (a per-project sequence counter, not a
+  # timestamp - time() is only 1-second resolution) - reused here
+  # verbatim since this replaces the SAME track in place, the same way
+  # voice-edit's fade/autotrim/gate/deess do (autotune is a vocal
+  # CLEANUP step, not a new layered track like `double`).
+  let edit_seq = p.has("edit_seq") ? p["edit_seq"] + 1 : 1
+  p["edit_seq"] = edit_seq
+  let out_path = dir_of(path) + "/" + name + "_edit" + str(edit_seq) + ".wav"
+  let w = wav.open_write(out_path, SAMPLE_RATE, 1)
+  wav.write_chunk(w, tuned)
+  wav.close_write(w)
+
+  let info = probe_wav(out_path)
+  track["path"] = out_path
+  track["data_start"] = info["data_start"]
+  track["total_samples"] = info["total_samples"]
+  p["tracks"][idx] = track
+  save_project(path, p)
+  print(name + ": autotuned (strength=" + str(strength) + ", " + str(corrected_frames) + "/" + str(len(pitch_track)) +
+        " voiced frames corrected) -> " + out_path)
 }
 
 fn cmd_mix(a) {
@@ -1821,6 +1976,7 @@ cli.command(app, "record", "capture a track from the mic (hosted-only, needs are
 cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
 cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] - changes pitch AND tempo together, see the command's own note", fn(a) { cmd_double(a) })
+cli.command(app, "autotune", "real pitch correction, in place (free, <=180s clips): autotune NAME --strength=0..1 [--key=SEMITONES-FROM-A4] [--scale=major|minor] - 0=off, low=natural, 1=hard-snap", fn(a) { cmd_autotune(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
 cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--clear]", fn(a) { cmd_strip(a) })
 cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })
