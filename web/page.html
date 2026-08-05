@@ -280,6 +280,13 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <label class="fx-toggle"><input type="checkbox" id="fx-gate"> Noise gate <span class="hint">— quiets room noise between phrases</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-deess"> De-esser <span class="hint">— tames harsh "S"/"T" sounds</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-double"> Quick double <span class="hint">— layers a copy for thickness/harmony. Pitch shifted, timing preserved.</span></label>
+        <div style="display:flex; align-items:center; gap:10px; margin:10px 0">
+          <label class="fx-toggle" style="margin:0"><input type="checkbox" id="fx-harmonize"> Auto-harmony <span class="hint">— a real backing line that follows the song's actual chords</span></label>
+          <select id="fx-harmonize-interval" style="background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:6px 10px; font-size:12.5px">
+            <option value="third">Third above</option>
+            <option value="fifth">Fifth above</option>
+          </select>
+        </div>
         <div class="ctrl-row">
           <label>Fade in</label>
           <input type="range" id="fx-fadein" min="0" max="2" step="0.05" value="0.05">
@@ -327,6 +334,11 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
             <div class="scrub" data-deck="result"><div class="scrub-fill"></div></div>
             <span class="time" data-deck="result">0:00</span>
           </div>
+          <div class="meter" id="result-meter"><i></i></div>
+        </div>
+        <div id="stems-box" style="display:none; margin-top:14px">
+          <div class="section-label" style="margin:0 0 8px">Download stems</div>
+          <div id="stems-list" style="display:flex; flex-wrap:wrap; gap:8px"></div>
         </div>
       </div>
     </div>
@@ -471,6 +483,14 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <input type="range" data-master="ceiling" min="-12" max="-0.1" step="0.1" value="-1">
         <span class="val" data-readout="ceiling">-1 dB</span>
       </div>
+      <div style="display:flex; align-items:center; gap:9px; margin:-4px 0 14px; flex-wrap:wrap">
+        <span style="font-size:12px; color:var(--muted)">Streaming target <a class="info-dot" href="docs/#loudness-target" target="_blank">?</a></span>
+        <div class="preset-row" id="lufs-row" style="margin:0">
+          <button type="button" class="preset-chip active" data-lufs="">Off (manual)</button>
+          <button type="button" class="preset-chip" data-lufs="-14">Spotify/YouTube (-14)</button>
+          <button type="button" class="preset-chip" data-lufs="-23">Broadcast (-23)</button>
+        </div>
+      </div>
       <div class="ctrl-row">
         <label>Stereo width <a class="info-dot" href="docs/#width" target="_blank">?</a></label>
         <input type="range" data-master="width" min="0" max="2" step="0.05" value="1">
@@ -559,6 +579,38 @@ function makeDeck(name, data){
   });
   render();
   return { audio, setData(newData){ data = newData; mode = "before"; audio.src = data.before.url; render(); } };
+}
+
+// Real-time level meter while LISTENING BACK to a deck (not just while
+// recording, see startInputMeter above) - createMediaElementSource
+// re-routes the element's audio through the Web Audio graph, so the
+// analyser MUST be reconnected to ctx.destination or playback goes
+// silent. Only ever called once per audio element (createMediaElementSource
+// throws on a second call for the same element).
+function attachPlaybackMeter(audio, meterSelector){
+  const bar = document.querySelector(meterSelector + " i");
+  if (!bar) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaElementSource(audio);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    src.connect(analyser);
+    analyser.connect(ctx.destination);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const tick = () => {
+      if (!audio.paused) {
+        analyser.getByteTimeDomainData(data);
+        let sumSq = 0;
+        for (let i = 0; i < data.length; i++) { const v = (data[i]-128)/128; sumSq += v*v; }
+        bar.style.width = Math.min(100, Math.sqrt(sumSq/data.length) * 220) + "%";
+      } else {
+        bar.style.width = "0%";
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (e) { /* meter is cosmetic - playback itself must still work even if this fails */ }
 }
 
 const demoDeck = makeDeck("demo", DEMO);
@@ -929,6 +981,8 @@ function collectFx(){
     deess: document.getElementById("fx-deess").checked,
     double: document.getElementById("fx-double").checked,
     doubleSemitones: 0.15,
+    harmonize: document.getElementById("fx-harmonize").checked,
+    harmonizeInterval: document.getElementById("fx-harmonize-interval").value,
     autotuneStrength: Number(document.getElementById("fx-autotune").value),
     autotuneKey: Number(document.getElementById("fx-autotune-key").value),
     autotuneScale: scale || null,
@@ -968,6 +1022,29 @@ document.getElementById("use-arrangement-btn").addEventListener("click", async (
   }
 });
 
+// PLAN5.md Phase O/P - real stem downloads, one per track that actually
+// rendered onto this project (beat/vocal/melody plus any layered extras
+// like a double or harmony line) - a real "professional" deliverable
+// for remixing elsewhere, not just the final 2-track mix.
+const STEM_LABELS = { beat: "Beat", vocal: "Vocal", melody: "Bass & chords", vocal_double: "Vocal double", vocal_harmony: "Harmony" };
+function renderStems(stems){
+  const box = document.getElementById("stems-box");
+  const list = document.getElementById("stems-list");
+  if (!stems || Object.keys(stems).length === 0) { box.style.display = "none"; return; }
+  list.innerHTML = "";
+  Object.keys(stems).forEach(name => {
+    const a = document.createElement("a");
+    a.href = stems[name] + "?v=" + Date.now();
+    a.download = "";
+    a.className = "btn-ghost";
+    a.style.textDecoration = "none";
+    a.style.display = "inline-block";
+    a.textContent = "⬇ " + (STEM_LABELS[name] || name);
+    list.appendChild(a);
+  });
+  box.style.display = "";
+}
+
 let resultDeck = null;
 function pollStatus(isRerender){
   const iv = setInterval(async () => {
@@ -977,9 +1054,12 @@ function pollStatus(isRerender){
       data = await res.json();
     } catch (e) { return; }
     if (data.status === "processing") {
-      const msg = isRerender
+      // Real per-stage progress when process.py has reported one (see
+      // PLAN5.md Phase O) - falls back to a generic message for the
+      // brief window before the first stage lands.
+      const msg = data.stage || (isRerender
         ? "Re-rendering with your new settings — usually under a minute..."
-        : "Mixing and mastering your track now — this usually takes under a couple of minutes...";
+        : "Mixing and mastering your track now — this usually takes under a couple of minutes...");
       setStatus(msg);
       if (isRerender) setMixerStatus(msg);
     } else if (data.status === "done") {
@@ -993,8 +1073,9 @@ function pollStatus(isRerender){
         before: { url: data.before_url + "?v=" + Date.now(), peak: -3.0 },
         after:  { url: data.after_url + "?v=" + Date.now(),  peak: (typeof data.peak_dbfs === "number" ? data.peak_dbfs : -1.0) },
       };
-      if (!resultDeck) resultDeck = makeDeck("result", resultData);
+      if (!resultDeck) { resultDeck = makeDeck("result", resultData); attachPlaybackMeter(resultDeck.audio, "#result-meter"); }
       else resultDeck.setData(resultData);
+      renderStems(data.stems);
       if (isRerender) {
         setMixerStatus("Updated — listen to “Your mastered track” above.", "ok");
         setApplyEnabled(true);
@@ -1032,6 +1113,14 @@ const PRESETS = {
   clean: { low: 0.5, mid: 0.0, high: 1.0, thresh: -12, ratio: 2.0, ceiling: -1.0, width: 1.0, saturation: 0.0 },
 };
 let activePreset = "custom";
+let targetLufs = null;
+document.querySelectorAll("#lufs-row .preset-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    document.querySelectorAll("#lufs-row .preset-chip").forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    targetLufs = chip.dataset.lufs ? Number(chip.dataset.lufs) : null;
+  });
+});
 
 function fmtDb(v){ const n = Number(v); return (n > 0 ? "+" : "") + n.toFixed(n % 1 === 0 ? 0 : 1) + " dB"; }
 function fmtPan(v){ const n = Number(v); if (Math.abs(n) < 0.01) return "C"; return (n < 0 ? "L" : "R") + Math.round(Math.abs(n) * 100); }
@@ -1139,7 +1228,7 @@ function collectParams(){
     const mute = soloTrack ? (name !== soloTrack) : mutedByChip;
     tracks[name] = { gain, pan, mute, strip: collectStrip(panel) };
   });
-  const master = { preset: activePreset === "custom" ? null : activePreset };
+  const master = { preset: activePreset === "custom" ? null : activePreset, targetLufs: targetLufs };
   document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
     master[input.dataset.master] = Number(input.value);
   });
@@ -1165,6 +1254,8 @@ function applyDefaultsToUI(){
     input.value = DEFAULTS.master[input.dataset.master];
   });
   setActivePreset("custom");
+  targetLufs = null;
+  document.querySelectorAll("#lufs-row .preset-chip").forEach(c => c.classList.toggle("active", c.dataset.lufs === ""));
   document.querySelectorAll('.mix-panel input[type="range"]').forEach(input => input.dispatchEvent(new Event("input")));
 }
 

@@ -70,6 +70,8 @@ footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); fo
       <a href="#saturation">Saturation</a>
       <a href="#autotune">Autotune</a>
       <a href="#reverb">Reverb</a>
+      <a href="#harmony">Auto-harmony</a>
+      <a href="#loudness-target">Streaming loudness target</a>
     </nav>
   </header>
 
@@ -153,6 +155,21 @@ footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); fo
     <p class="default">Default: off</p>
     <p>A real algorithmic reverb (multiple overlapping echo/delay lines combined, the classic technique behind most reverb plugins) that adds a sense of space/room around a track, distinct from the single-repeat Delay/echo send above. <b>Amount</b> is how much of the reverb tail gets mixed in; <b>Decay</b> is how long that tail rings out before fading away.</p>
     <div class="try"><b>Try this:</b> a small amount (10-20%) on a vocal can make a dry bedroom recording feel more like a real room without becoming obviously "wet." Push both higher for a deliberate ambient/spacious effect.</div>
+  </section>
+
+  <section class="entry" id="harmony">
+    <h2>Auto-harmony <span class="range">Third or fifth above</span></h2>
+    <p class="default">Default: off</p>
+    <p>Adds a real backing-vocal harmony line that follows your song's ACTUAL chords, not one fixed interval the whole way through — under a major chord it sings a major third/fifth, under a minor chord it correctly switches to a minor one, the same way a real backing vocalist would follow the chart. It detects your real sung pitch and shifts it, so the harmony still follows your own melody and phrasing, just offset. Needs a chord progression on the beat (drums-only beats with "Bass & chords" turned off can't harmonize).</p>
+    <div class="try"><b>Try this:</b> a third above sits close to the lead vocal and blends in; a fifth above is more spacious/anthemic and sits apart more. Try both and see which suits the song.</div>
+  </section>
+
+  <section class="entry" id="loudness-target">
+    <h2>Streaming loudness target <span class="range">e.g. -14 LUFS</span></h2>
+    <p class="default">Default: off (manual Loudness slider only)</p>
+    <p>Real streaming platforms (Spotify, YouTube, Apple Music) don't just look at your track's peak level — they measure its overall perceived loudness (LUFS) and turn tracks up or down to match a target, so a track mastered too loud often gets turned DOWN on playback anyway. Picking a streaming target here measures your mix's actual loudness and adjusts the gain feeding into mastering so the result lands close to that target, instead of just maxing out the Loudness ceiling.</p>
+    <p><b>Honesty note:</b> this is a close, genuinely useful approximation of the real broadcast-standard measurement (ITU-R BS.1770), not a certified bit-exact implementation — expect it to land close to the target, especially exact for moderate targets, with a bit more variance for very loud/aggressive ones where the limiter itself has more influence on the final result than the initial gain adjustment did.</p>
+    <div class="try"><b>Try this:</b> "Spotify/YouTube (-14)" is a safe default if you're uploading to streaming platforms and don't want your track turned down. Leave it off if you're going for a maximally loud, "as loud as possible" master instead.</div>
   </section>
 
   <section class="entry">
