@@ -147,6 +147,31 @@ section .sub{color:var(--muted); font-size:14px; margin:0 0 18px}
 .unit h3{margin:6px 0 6px; font-size:15px; font-weight:700}
 .unit p{margin:0; font-size:12.5px; color:var(--muted); line-height:1.5}
 
+.melody-toggle{display:flex; align-items:center; gap:9px; font-size:13.5px; color:var(--text); margin-top:14px; cursor:pointer}
+.melody-toggle input{width:16px; height:16px; accent-color:var(--hot); cursor:pointer}
+.melody-toggle span.hint{color:var(--muted); font-size:12px; font-weight:400}
+
+.wave{width:100%; height:44px; display:block; margin:2px 0 4px; border-radius:6px; background:var(--panel)}
+.meter{height:6px; background:var(--bg2); border-radius:3px; overflow:hidden; margin-top:12px; border:1px solid var(--border)}
+.meter i{display:block; height:100%; width:0%; background:linear-gradient(90deg, var(--cool), var(--hot) 75%, var(--ember)); transition:width .06s linear}
+
+.adv-toggle{appearance:none; border:0; background:transparent; color:var(--muted-dim); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:8px 0 0; cursor:pointer; display:flex; align-items:center; gap:5px}
+.adv-toggle:hover{color:var(--hot)}
+.adv-toggle .car{transition:transform .18s ease; display:inline-block}
+.adv-toggle.open .car{transform:rotate(90deg)}
+.adv-body{display:none; margin-top:8px; padding-top:14px; border-top:1px solid var(--border)}
+.adv-body.on{display:block}
+.adv-sub{font-size:11.5px; color:var(--muted-dim); margin:14px 0 2px; text-transform:uppercase; letter-spacing:.06em; font-weight:700}
+.adv-sub:first-child{margin-top:0}
+.duck-row{display:flex; align-items:center; gap:9px; font-size:13px; color:var(--text); margin:10px 0; cursor:pointer}
+.duck-row input{width:16px; height:16px; accent-color:var(--hot); cursor:pointer}
+.duck-row span.hint{color:var(--muted); font-size:12px; font-weight:400}
+
+.preset-row{display:flex; flex-wrap:wrap; gap:8px; margin:0 0 18px}
+.preset-chip{appearance:none; border:1px solid var(--border); background:var(--panel2); color:var(--muted); font-size:13px; font-weight:600; padding:9px 15px; border-radius:10px; cursor:pointer; transition:.15s ease}
+.preset-chip:hover{border-color:var(--hot); color:var(--text)}
+.preset-chip.active{background:var(--hot); border-color:var(--hot); color:#1a1200}
+
 .note{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; font-size:13.5px; color:var(--muted)}
 .note b{color:var(--text)}
 .note a{color:var(--hot); text-decoration:none}
@@ -201,6 +226,7 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <input type="range" id="bpm-slider" min="60" max="200" step="1" value="90">
         <span class="val" id="bpm-val">90 BPM</span>
       </div>
+      <label class="melody-toggle"><input type="checkbox" id="melody-toggle" checked> Bass &amp; chords <span class="hint">— a real generated chord progression under the drums, genre-matched. Uncheck for drums only.</span></label>
       <div class="mixer-actions" style="margin-top:16px">
         <button class="btn-primary" id="generate-btn">Generate a new beat</button>
         <span class="mixer-note" id="beatgen-status" style="margin-top:0"></span>
@@ -229,6 +255,7 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         </div>
         <div class="rec-timer" id="rec-timer">0:00</div>
       </div>
+      <div class="meter" id="rec-meter"><i></i></div>
       <div class="progress" id="rec-progress"><i></i></div>
       <div class="rec-status" id="rec-status"></div>
 
@@ -244,6 +271,7 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <label class="fx-toggle"><input type="checkbox" id="fx-autotrim" checked> Auto-trim leading silence <span class="hint">— trims dead air before you start talking/singing</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-gate"> Noise gate <span class="hint">— quiets room noise between phrases</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-deess"> De-esser <span class="hint">— tames harsh "S"/"T" sounds</span></label>
+        <label class="fx-toggle"><input type="checkbox" id="fx-double"> Quick double <span class="hint">— layers a subtly detuned copy for thickness. Changes pitch and timing slightly, by design.</span></label>
         <div class="ctrl-row">
           <label>Fade in</label>
           <input type="range" id="fx-fadein" min="0" max="2" step="0.05" value="0.05">
@@ -300,6 +328,17 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <input type="range" data-param="pan" min="-1" max="1" step="0.05" value="0">
         <span class="val" data-readout="pan">C</span>
       </div>
+      <button type="button" class="adv-toggle" data-adv-toggle>Advanced <span class="car">&#9656;</span></button>
+      <div class="adv-body" data-adv-body>
+        <label class="duck-row"><input type="checkbox" data-duck="vocal"> Duck under your vocal <span class="hint">— the beat automatically dips while you're singing/talking</span></label>
+        <div class="adv-sub">EQ</div>
+        <div class="ctrl-row"><label>Low</label><input type="range" data-strip="eqLow" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqLow">0 dB</span></div>
+        <div class="ctrl-row"><label>Mid</label><input type="range" data-strip="eqMid" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqMid">0 dB</span></div>
+        <div class="ctrl-row"><label>High</label><input type="range" data-strip="eqHigh" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqHigh">0 dB</span></div>
+        <div class="adv-sub">Compressor</div>
+        <div class="ctrl-row"><label>Threshold</label><input type="range" data-strip="compThresh" min="-40" max="0" step="1" value="0"><span class="val" data-readout="compThresh">off</span></div>
+        <div class="ctrl-row"><label>Ratio</label><input type="range" data-strip="compRatio" min="1" max="10" step="0.5" value="3"><span class="val" data-readout="compRatio">3:1</span></div>
+      </div>
     </div>
     <div class="mix-panel" data-track="vocal">
       <div class="track-head">
@@ -319,9 +358,58 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <input type="range" data-param="pan" min="-1" max="1" step="0.05" value="0">
         <span class="val" data-readout="pan">C</span>
       </div>
+      <button type="button" class="adv-toggle" data-adv-toggle>Advanced <span class="car">&#9656;</span></button>
+      <div class="adv-body" data-adv-body>
+        <div class="adv-sub">EQ</div>
+        <div class="ctrl-row"><label>Low</label><input type="range" data-strip="eqLow" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqLow">0 dB</span></div>
+        <div class="ctrl-row"><label>Mid</label><input type="range" data-strip="eqMid" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqMid">0 dB</span></div>
+        <div class="ctrl-row"><label>High</label><input type="range" data-strip="eqHigh" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqHigh">0 dB</span></div>
+        <div class="adv-sub">Compressor</div>
+        <div class="ctrl-row"><label>Threshold</label><input type="range" data-strip="compThresh" min="-40" max="0" step="1" value="0"><span class="val" data-readout="compThresh">off</span></div>
+        <div class="ctrl-row"><label>Ratio</label><input type="range" data-strip="compRatio" min="1" max="10" step="0.5" value="3"><span class="val" data-readout="compRatio">3:1</span></div>
+        <div class="adv-sub">Delay / echo send</div>
+        <div class="ctrl-row"><label>Time</label><input type="range" data-strip="delayMs" min="0" max="800" step="10" value="0"><span class="val" data-readout="delayMs">off</span></div>
+        <div class="ctrl-row"><label>Feedback</label><input type="range" data-strip="delayFeedback" min="0" max="0.9" step="0.05" value="0.3"><span class="val" data-readout="delayFeedback">30%</span></div>
+        <div class="ctrl-row"><label>Mix</label><input type="range" data-strip="delayMix" min="0" max="1" step="0.05" value="0"><span class="val" data-readout="delayMix">0%</span></div>
+      </div>
+    </div>
+    <div class="mix-panel" data-track="melody" id="melody-panel" style="display:none">
+      <div class="track-head">
+        <h3>Bass &amp; chords</h3>
+        <div class="tools">
+          <button class="chip-btn" data-action="solo">Solo</button>
+          <button class="chip-btn" data-action="mute">Mute</button>
+        </div>
+      </div>
+      <div class="ctrl-row">
+        <label>Volume <a class="info-dot" href="docs/#volume" target="_blank">?</a></label>
+        <input type="range" data-param="gain" min="-24" max="12" step="0.5" value="-6">
+        <span class="val" data-readout="gain">-6 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Pan <a class="info-dot" href="docs/#pan" target="_blank">?</a></label>
+        <input type="range" data-param="pan" min="-1" max="1" step="0.05" value="0">
+        <span class="val" data-readout="pan">C</span>
+      </div>
+      <button type="button" class="adv-toggle" data-adv-toggle>Advanced <span class="car">&#9656;</span></button>
+      <div class="adv-body" data-adv-body>
+        <div class="adv-sub">EQ</div>
+        <div class="ctrl-row"><label>Low</label><input type="range" data-strip="eqLow" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqLow">0 dB</span></div>
+        <div class="ctrl-row"><label>Mid</label><input type="range" data-strip="eqMid" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqMid">0 dB</span></div>
+        <div class="ctrl-row"><label>High</label><input type="range" data-strip="eqHigh" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqHigh">0 dB</span></div>
+        <div class="adv-sub">Compressor</div>
+        <div class="ctrl-row"><label>Threshold</label><input type="range" data-strip="compThresh" min="-40" max="0" step="1" value="0"><span class="val" data-readout="compThresh">off</span></div>
+        <div class="ctrl-row"><label>Ratio</label><input type="range" data-strip="compRatio" min="1" max="10" step="0.5" value="3"><span class="val" data-readout="compRatio">3:1</span></div>
+      </div>
     </div>
 
     <div class="section-label">Master</div>
+    <div class="preset-row" id="preset-row">
+      <button type="button" class="preset-chip" data-preset="loud">Loud</button>
+      <button type="button" class="preset-chip" data-preset="warm">Warm</button>
+      <button type="button" class="preset-chip" data-preset="clean">Clean</button>
+      <button type="button" class="preset-chip active" data-preset="custom">Custom</button>
+    </div>
     <div class="mix-panel" id="master-panel">
       <div class="ctrl-row">
         <label>Warmth <a class="info-dot" href="docs/#warmth" target="_blank">?</a></label>
@@ -352,6 +440,16 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <label>Loudness <a class="info-dot" href="docs/#loudness" target="_blank">?</a></label>
         <input type="range" data-master="ceiling" min="-12" max="-0.1" step="0.1" value="-1">
         <span class="val" data-readout="ceiling">-1 dB</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Stereo width <a class="info-dot" href="docs/#width" target="_blank">?</a></label>
+        <input type="range" data-master="width" min="0" max="2" step="0.05" value="1">
+        <span class="val" data-readout="width">1.0×</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Saturation <a class="info-dot" href="docs/#saturation" target="_blank">?</a></label>
+        <input type="range" data-master="saturation" min="0" max="5" step="0.1" value="0">
+        <span class="val" data-readout="saturation">off</span>
       </div>
     </div>
 
@@ -471,6 +569,8 @@ const generateBtn = document.getElementById("generate-btn");
 const beatgenStatus = document.getElementById("beatgen-status");
 const bpmSlider = document.getElementById("bpm-slider");
 const bpmVal = document.getElementById("bpm-val");
+const melodyToggle = document.getElementById("melody-toggle");
+const melodyPanel = document.getElementById("melody-panel");
 
 function setBeatgenStatus(msg, cls){ beatgenStatus.textContent = msg || ""; beatgenStatus.style.color = cls === "err" ? "var(--ember)" : cls === "ok" ? "var(--hot)" : ""; }
 
@@ -495,7 +595,7 @@ generateBtn.addEventListener("click", async () => {
   try {
     const res = await fetch(API + "/beat?session=" + sessionId, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ genre: currentBeat.genre, bpm: currentBeat.bpm, bars: 4 }),
+      body: JSON.stringify({ genre: currentBeat.genre, bpm: currentBeat.bpm, bars: 4, melody: melodyToggle.checked }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "request failed");
@@ -517,12 +617,13 @@ function pollBeatStatus(){
       beatReady = true;
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate another beat";
-      setBeatgenStatus("Ready — press play to preview.", "ok");
+      setBeatgenStatus(data.melody ? "Ready — bass & chords included. Press play to preview." : "Ready — drums only. Press play to preview.", "ok");
       document.getElementById("deck-beatgen").classList.add("on");
       const url = data.beat_url + "?v=" + Date.now();
       if (!beatgenDeck) beatgenDeck = makeSimpleDeck("beatgen", url);
       else beatgenDeck.setSrc(url);
       recSub.textContent = "Your " + data.genre + " beat plays while you perform.";
+      melodyPanel.style.display = data.melody ? "" : "none";
     } else if (data.status === "error") {
       clearInterval(iv);
       setBeatgenStatus("Something went wrong: " + (data.message || "unknown error"), "err");
@@ -558,6 +659,35 @@ let takes = []; // {blob, url, duration, trimStart, trimEnd, gapBefore}
 function setStatus(msg, cls){ recStatus.textContent = msg || ""; recStatus.className = "rec-status" + (cls ? " " + cls : ""); }
 function fmtSec(s){ return Number(s).toFixed(2) + "s"; }
 function playbackDeck(){ return beatReady && beatgenDeck ? beatgenDeck : demoDeck; }
+
+// Real waveform, decoded client-side (same Web Audio API the arrangement
+// preview already uses to decode takes) - a min/max envelope per pixel
+// column, drawn once per take card. Purely visual; never touches what
+// gets uploaded.
+let waveDecodeCtx = null;
+async function drawWaveform(canvas, blob){
+  try {
+    if (!waveDecodeCtx) waveDecodeCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await waveDecodeCtx.decodeAudioData(await blob.arrayBuffer());
+    const data = buf.getChannelData(0);
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height, mid = h / 2;
+    const perCol = Math.max(1, Math.floor(data.length / w));
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--cool").trim() || "#5b6472";
+    for (let x = 0; x < w; x++) {
+      let min = 1, max = -1;
+      const start = x * perCol;
+      for (let i = 0; i < perCol && start + i < data.length; i++) {
+        const v = data[start + i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      const y0 = mid + min * mid, y1 = mid + max * mid;
+      ctx.fillRect(x, Math.min(y0, y1), 1, Math.max(1, Math.abs(y1 - y0)));
+    }
+  } catch (e) { /* decode failed - the waveform is a visual aid, not required for the take to work */ }
+}
 
 // MediaRecorder blobs (esp. webm/opus in Chrome) commonly report
 // duration=Infinity until something forces a real duration computation -
@@ -601,6 +731,7 @@ recBtn.addEventListener("click", async () => {
     stream.getTracks().forEach(t => t.stop());
     playbackDeck().audio.pause();
     clearInterval(timerInterval);
+    stopInputMeter();
     recBtn.classList.remove("recording");
     recTitle.textContent = "Press record to capture a take";
     recSub.textContent = beatReady ? "Your " + currentBeat.genre + " beat plays while you perform." : "Generate a beat above first, or record straight over the default groove.";
@@ -608,6 +739,7 @@ recBtn.addEventListener("click", async () => {
   });
 
   mediaRecorder.start();
+  startInputMeter(stream);
   const deck = playbackDeck();
   deck.audio.currentTime = 0;
   deck.audio.loop = true;
@@ -623,6 +755,39 @@ recBtn.addEventListener("click", async () => {
     if (elapsed >= MAX_SECONDS) mediaRecorder.stop();
   }, 1000);
 });
+
+// ---- real-time input level meter while recording - purely visual
+// feedback (Web Audio AnalyserNode reading the SAME getUserMedia stream
+// MediaRecorder is already capturing), never touches the recorded audio
+// itself. ----
+const recMeterBar = document.querySelector("#rec-meter i");
+let meterCtx = null, meterAnalyser = null, meterData = null, meterRAF = null;
+function startInputMeter(stream){
+  try {
+    meterCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = meterCtx.createMediaStreamSource(stream);
+    meterAnalyser = meterCtx.createAnalyser();
+    meterAnalyser.fftSize = 512;
+    meterData = new Uint8Array(meterAnalyser.frequencyBinCount);
+    src.connect(meterAnalyser);
+    const tick = () => {
+      meterAnalyser.getByteTimeDomainData(meterData);
+      let sumSq = 0;
+      for (let i = 0; i < meterData.length; i++) { const v = (meterData[i] - 128) / 128; sumSq += v * v; }
+      const rms = Math.sqrt(sumSq / meterData.length);
+      recMeterBar.style.width = Math.min(100, rms * 220) + "%";
+      meterRAF = requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (e) { /* AnalyserNode unavailable - the meter is cosmetic, recording itself is unaffected */ }
+}
+function stopInputMeter(){
+  if (meterRAF) cancelAnimationFrame(meterRAF);
+  meterRAF = null;
+  if (meterCtx) { try { meterCtx.close(); } catch (e) {} }
+  meterCtx = null;
+  recMeterBar.style.width = "0%";
+}
 
 async function finalizeTake(){
   const blob = new Blob(chunks, { type: (mediaRecorder && mediaRecorder.mimeType) || "audio/webm" });
@@ -648,9 +813,23 @@ function renderTakes(){
         '<button type="button" data-action="preview" aria-label="Preview">&#9654;</button>' +
         '<button type="button" data-action="delete" aria-label="Delete">&#10005;</button>' +
       '</div></div>' +
+      '<div style="position:relative">' +
+        '<canvas class="wave" width="600" height="44"></canvas>' +
+        '<div class="wave-mask" style="position:absolute;top:0;bottom:0;left:0;width:0;background:color-mix(in srgb, var(--bg) 65%, transparent)"></div>' +
+        '<div class="wave-mask" style="position:absolute;top:0;bottom:0;right:0;width:0;background:color-mix(in srgb, var(--bg) 65%, transparent)"></div>' +
+      '</div>' +
       '<div class="ctrl-row"><label>Trim start</label><input type="range" data-param="trimStart" min="0" max="' + t.duration + '" step="0.05" value="' + t.trimStart + '"><span class="val" data-readout="trimStart">' + fmtSec(t.trimStart) + '</span></div>' +
       '<div class="ctrl-row"><label>Trim end</label><input type="range" data-param="trimEnd" min="0" max="' + t.duration + '" step="0.05" value="' + t.trimEnd + '"><span class="val" data-readout="trimEnd">' + fmtSec(t.trimEnd) + '</span></div>' +
       (i > 0 ? '<div class="ctrl-row"><label>Gap before</label><input type="range" data-param="gapBefore" min="0" max="5" step="0.1" value="' + t.gapBefore + '"><span class="val" data-readout="gapBefore">' + fmtSec(t.gapBefore) + '</span></div>' : "");
+
+    const masks = card.querySelectorAll(".wave-mask");
+    function updateMasks(){
+      const d = t.duration || 1;
+      masks[0].style.width = Math.max(0, (t.trimStart / d) * 100) + "%";
+      masks[1].style.width = Math.max(0, ((d - t.trimEnd) / d) * 100) + "%";
+    }
+    updateMasks();
+    drawWaveform(card.querySelector("canvas.wave"), t.blob);
 
     card.querySelectorAll("input[data-param]").forEach(input => {
       input.addEventListener("input", () => {
@@ -660,6 +839,7 @@ function renderTakes(){
         if (param === "trimEnd" && v <= t.trimStart) v = t.trimStart + 0.05;
         t[param] = v;
         card.querySelector('[data-readout="' + param + '"]').textContent = fmtSec(v);
+        if (param === "trimStart" || param === "trimEnd") updateMasks();
       });
     });
     card.querySelector('[data-action="up"]').addEventListener("click", () => { if (i > 0) { [takes[i-1], takes[i]] = [takes[i], takes[i-1]]; renderTakes(); } });
@@ -708,6 +888,8 @@ function collectFx(){
     autotrim: document.getElementById("fx-autotrim").checked,
     gate: document.getElementById("fx-gate").checked,
     deess: document.getElementById("fx-deess").checked,
+    double: document.getElementById("fx-double").checked,
+    doubleSemitones: 0.15,
   };
 }
 wireSlider(document.getElementById("fx-fadein"), v => Number(v).toFixed(2) + "s");
@@ -763,6 +945,7 @@ function pollStatus(isRerender){
       setStatus("Done — your mastered track is ready below.", "ok");
       resultBox.classList.add("on");
       mixerBox.classList.add("on");
+      melodyPanel.style.display = data.melody ? "" : "none";
       const resultData = {
         before: { url: data.before_url + "?v=" + Date.now(), peak: -3.0 },
         after:  { url: data.after_url + "?v=" + Date.now(),  peak: (typeof data.peak_dbfs === "number" ? data.peak_dbfs : -1.0) },
@@ -788,14 +971,32 @@ function pollStatus(isRerender){
 // ---- mixer + master controls ----
 const DEFAULTS = {
   tracks: {
-    beat:  { gain: -1, pan: 0, mute: false },
-    vocal: { gain: 2,  pan: 0, mute: false },
+    beat:   { gain: -1, pan: 0, mute: false },
+    vocal:  { gain: 2,  pan: 0, mute: false },
+    melody: { gain: -6, pan: 0, mute: false },
   },
-  master: { low: 2, mid: 0.5, high: 3, thresh: -14, ratio: 3, ceiling: -1 },
+  strip: { eqLow: 0, eqMid: 0, eqHigh: 0, compThresh: 0, compRatio: 3, delayMs: 0, delayFeedback: 0.3, delayMix: 0 },
+  master: { low: 2, mid: 0.5, high: 3, thresh: -14, ratio: 3, ceiling: -1, width: 1, saturation: 0 },
 };
+
+// Mirrors beatstudio.lz's own mastering_preset() exactly (see PLAN3.md
+// Phase F) - clicking a preset here just fills in the same sliders a
+// visitor could set by hand, so what you see IS what gets sent, nothing
+// hidden happens server-side beyond the sliders' own values.
+const PRESETS = {
+  loud:  { low: 2.0, mid: 1.0, high: 3.0, thresh: -18, ratio: 4.0, ceiling: -0.5, width: 1.15, saturation: 1.5 },
+  warm:  { low: 3.0, mid: -0.5, high: 1.0, thresh: -16, ratio: 2.5, ceiling: -1.0, width: 1.0, saturation: 2.5 },
+  clean: { low: 0.5, mid: 0.0, high: 1.0, thresh: -12, ratio: 2.0, ceiling: -1.0, width: 1.0, saturation: 0.0 },
+};
+let activePreset = "custom";
 
 function fmtDb(v){ const n = Number(v); return (n > 0 ? "+" : "") + n.toFixed(n % 1 === 0 ? 0 : 1) + " dB"; }
 function fmtPan(v){ const n = Number(v); if (Math.abs(n) < 0.01) return "C"; return (n < 0 ? "L" : "R") + Math.round(Math.abs(n) * 100); }
+function fmtThresh(v){ const n = Number(v); return n === 0 ? "off" : n.toFixed(0) + " dB"; }
+function fmtDelayMs(v){ const n = Number(v); return n === 0 ? "off" : n.toFixed(0) + "ms"; }
+function fmtPct(v){ return Math.round(Number(v) * 100) + "%"; }
+function fmtSat(v){ const n = Number(v); return n === 0 ? "off" : n.toFixed(1); }
+function fmtWidth(v){ return Number(v).toFixed(2) + "x"; }
 
 function readoutFor(input){
   const row = input.closest(".ctrl-row");
@@ -811,12 +1012,54 @@ function wireSlider(input, formatFn){
 
 document.querySelectorAll('.mix-panel[data-track] input[data-param="gain"]').forEach(el => wireSlider(el, fmtDb));
 document.querySelectorAll('.mix-panel[data-track] input[data-param="pan"]').forEach(el => wireSlider(el, fmtPan));
+document.querySelectorAll('input[data-strip="eqLow"], input[data-strip="eqMid"], input[data-strip="eqHigh"]').forEach(el => wireSlider(el, fmtDb));
+document.querySelectorAll('input[data-strip="compThresh"]').forEach(el => wireSlider(el, fmtThresh));
+document.querySelectorAll('input[data-strip="compRatio"]').forEach(el => wireSlider(el, v => Number(v).toFixed(1) + ":1"));
+document.querySelectorAll('input[data-strip="delayMs"]').forEach(el => wireSlider(el, fmtDelayMs));
+document.querySelectorAll('input[data-strip="delayFeedback"], input[data-strip="delayMix"]').forEach(el => wireSlider(el, fmtPct));
 wireSlider(document.querySelector('input[data-master="low"]'), fmtDb);
 wireSlider(document.querySelector('input[data-master="mid"]'), fmtDb);
 wireSlider(document.querySelector('input[data-master="high"]'), fmtDb);
 wireSlider(document.querySelector('input[data-master="thresh"]'), v => Number(v).toFixed(0) + " dB");
 wireSlider(document.querySelector('input[data-master="ratio"]'), v => Number(v).toFixed(1) + ":1");
 wireSlider(document.querySelector('input[data-master="ceiling"]'), v => Number(v).toFixed(1) + " dB");
+wireSlider(document.querySelector('input[data-master="width"]'), fmtWidth);
+wireSlider(document.querySelector('input[data-master="saturation"]'), fmtSat);
+
+// Any manual master-slider edit drops out of a named preset back to
+// "Custom" - the honest signal that what's about to render no longer
+// exactly matches the preset's own numbers.
+document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
+  input.addEventListener("input", () => setActivePreset("custom"));
+});
+
+function setActivePreset(name){
+  activePreset = name;
+  document.querySelectorAll(".preset-chip").forEach(c => c.classList.toggle("active", c.dataset.preset === name));
+}
+document.querySelectorAll(".preset-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    const name = chip.dataset.preset;
+    if (name === "custom") { setActivePreset("custom"); return; }
+    const p = PRESETS[name];
+    Object.keys(p).forEach(key => {
+      const input = document.querySelector('#master-panel input[data-master="' + key + '"]');
+      if (input) { input.value = p[key]; input.dispatchEvent(new Event("input")); }
+    });
+    setActivePreset(name);
+  });
+});
+
+// Advanced (EQ/compressor/duck/delay) sections start collapsed - the
+// primary flow stays just Volume/Pan, matching PLAN3.md's own scope note
+// (leaning "advanced/collapsed" to avoid overwhelming the default view).
+document.querySelectorAll("[data-adv-toggle]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const body = btn.nextElementSibling;
+    const open = body.classList.toggle("on");
+    btn.classList.toggle("open", open);
+  });
+});
 
 document.querySelectorAll('.mix-panel[data-track] .chip-btn[data-action="mute"]').forEach(btn => {
   btn.addEventListener("click", () => btn.classList.toggle("active"));
@@ -828,6 +1071,14 @@ document.querySelectorAll('.mix-panel[data-track] .chip-btn[data-action="solo"]'
     if (!wasActive) btn.classList.add("active");
   });
 });
+
+function collectStrip(panel){
+  const strip = {};
+  panel.querySelectorAll("[data-strip]").forEach(input => { strip[input.dataset.strip] = Number(input.value); });
+  const duck = panel.querySelector("[data-duck]");
+  strip.duckFrom = (duck && duck.checked) ? duck.dataset.duck : null;
+  return strip;
+}
 
 function collectParams(){
   const soloed = document.querySelector('.mix-panel[data-track] .chip-btn[data-action="solo"].active');
@@ -843,9 +1094,9 @@ function collectParams(){
     // mixer - it's a client-side convenience, the engine only ever sees
     // a plain mute flag per track.
     const mute = soloTrack ? (name !== soloTrack) : mutedByChip;
-    tracks[name] = { gain, pan, mute };
+    tracks[name] = { gain, pan, mute, strip: collectStrip(panel) };
   });
-  const master = {};
+  const master = { preset: activePreset === "custom" ? null : activePreset };
   document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
     master[input.dataset.master] = Number(input.value);
   });
@@ -860,10 +1111,17 @@ function applyDefaultsToUI(){
     panel.querySelector('input[data-param="pan"]').value = d.pan;
     panel.querySelector('.chip-btn[data-action="mute"]').classList.remove("active");
     panel.querySelector('.chip-btn[data-action="solo"]').classList.remove("active");
+    panel.querySelectorAll("[data-strip]").forEach(input => { input.value = DEFAULTS.strip[input.dataset.strip]; });
+    const duck = panel.querySelector("[data-duck]");
+    if (duck) duck.checked = false;
+    const advBody = panel.querySelector(".adv-body");
+    const advToggle = panel.querySelector(".adv-toggle");
+    if (advBody) { advBody.classList.remove("on"); advToggle.classList.remove("open"); }
   });
   document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
     input.value = DEFAULTS.master[input.dataset.master];
   });
+  setActivePreset("custom");
   document.querySelectorAll('.mix-panel input[type="range"]').forEach(input => input.dispatchEvent(new Event("input")));
 }
 

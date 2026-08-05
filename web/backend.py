@@ -44,6 +44,15 @@ EQ_RANGE = (-12.0, 12.0)
 THRESH_RANGE = (-40.0, 0.0)
 RATIO_RANGE = (1.0, 10.0)
 CEILING_RANGE = (-12.0, -0.1)
+# PLAN3.md Phase F/G ranges - mirror beatstudio.lz's own `strip`/`master` flags.
+WIDTH_RANGE = (0.0, 2.0)
+SATURATION_RANGE = (0.0, 5.0)
+DELAY_MS_RANGE = (0.0, 1000.0)
+DELAY_FEEDBACK_RANGE = (0.0, 0.9)
+DELAY_MIX_RANGE = (0.0, 1.0)
+MASTER_PRESETS = ("loud", "warm", "clean")
+TRACK_NAMES = ("beat", "vocal", "melody")
+DOUBLE_SEMITONES_RANGE = (-12.0, 12.0)
 
 # Mirrors beatstudio.lz's own GENRES list - kept in sync by hand (small,
 # rarely-changing list; not worth a shared-file mechanism for six names).
@@ -90,6 +99,30 @@ def write_status(session_id, status, **extra):
     os.replace(tmp, os.path.join(d, "status.json"))
 
 
+def normalize_strip(raw):
+    """Validates + clamps a per-track channel-strip blob (PLAN3.md Phase
+    F/G) - optional on every track, mirrors beatstudio.lz's `strip`
+    command 1:1. Every field defaults to "off" (0/false/None) so a track
+    with no strip configured produces the exact same params.json shape
+    (and the exact same beatstudio.lz behavior) as before this phase."""
+    if not isinstance(raw, dict):
+        raw = {}
+    duck_from = raw.get("duckFrom")
+    if duck_from not in TRACK_NAMES:
+        duck_from = None
+    return {
+        "eqLow": clamp(raw.get("eqLow", 0.0), *EQ_RANGE),
+        "eqMid": clamp(raw.get("eqMid", 0.0), *EQ_RANGE),
+        "eqHigh": clamp(raw.get("eqHigh", 0.0), *EQ_RANGE),
+        "compThresh": clamp(raw.get("compThresh", 0.0), THRESH_RANGE[0], 0.0),
+        "compRatio": clamp(raw.get("compRatio", 3.0), *RATIO_RANGE),
+        "duckFrom": duck_from,
+        "delayMs": clamp(raw.get("delayMs", 0.0), *DELAY_MS_RANGE),
+        "delayFeedback": clamp(raw.get("delayFeedback", 0.3), *DELAY_FEEDBACK_RANGE),
+        "delayMix": clamp(raw.get("delayMix", 0.0), *DELAY_MIX_RANGE),
+    }
+
+
 def normalize_params(raw):
     """Validates + clamps a params blob from the client into the exact
     shape process.py expects. Raises ValueError on anything malformed -
@@ -100,7 +133,7 @@ def normalize_params(raw):
     if not isinstance(tracks_in, dict):
         raise ValueError("params.tracks must be an object")
     tracks = {}
-    for name in ("beat", "vocal"):
+    for name in TRACK_NAMES:
         t = tracks_in.get(name, {})
         if not isinstance(t, dict):
             t = {}
@@ -108,17 +141,24 @@ def normalize_params(raw):
             "gain": clamp(t.get("gain", 0.0), *GAIN_RANGE),
             "pan": clamp(t.get("pan", 0.0), *PAN_RANGE),
             "mute": bool(t.get("mute", False)),
+            "strip": normalize_strip(t.get("strip")),
         }
     m = raw.get("master", {})
     if not isinstance(m, dict):
         m = {}
+    preset = m.get("preset")
+    if preset not in MASTER_PRESETS:
+        preset = None
     master = {
+        "preset": preset,
         "low": clamp(m.get("low", 1.5), *EQ_RANGE),
         "mid": clamp(m.get("mid", 0.0), *EQ_RANGE),
         "high": clamp(m.get("high", 2.0), *EQ_RANGE),
         "thresh": clamp(m.get("thresh", -14.0), *THRESH_RANGE),
         "ratio": clamp(m.get("ratio", 3.0), *RATIO_RANGE),
         "ceiling": clamp(m.get("ceiling", -1.0), *CEILING_RANGE),
+        "width": clamp(m.get("width", 1.0), *WIDTH_RANGE),
+        "saturation": clamp(m.get("saturation", 0.0), *SATURATION_RANGE),
     }
     return {"tracks": tracks, "master": master}
 
@@ -140,7 +180,11 @@ def normalize_beat_request(raw):
     # by hitting "Generate" again, which only works if the server picks
     # the randomness, not the client).
     seed = int(time.time() * 1000) % 2147483647
-    return {"genre": genre, "bpm": bpm, "bars": bars, "seed": seed}
+    # PLAN3.md Phase E: bass+chords on by default (that's the actual "full
+    # song" unlock, see beatstudio.lz's own header note) - a visitor can
+    # still opt out for a drums-only beat via --no-melody.
+    melody = bool(raw.get("melody", True))
+    return {"genre": genre, "bpm": bpm, "bars": bars, "seed": seed, "melody": melody}
 
 
 def normalize_manifest(raw):
@@ -174,12 +218,18 @@ def normalize_manifest(raw):
     fx_in = raw.get("fx", {})
     if not isinstance(fx_in, dict):
         fx_in = {}
+    double_semitones = clamp(fx_in.get("doubleSemitones", 0.15), *DOUBLE_SEMITONES_RANGE)
     fx = {
         "fadeIn": clamp(fx_in.get("fadeIn", 0.0), *FADE_RANGE),
         "fadeOut": clamp(fx_in.get("fadeOut", 0.0), *FADE_RANGE),
         "autotrim": bool(fx_in.get("autotrim", False)),
         "gate": bool(fx_in.get("gate", False)),
         "deess": bool(fx_in.get("deess", False)),
+        # PLAN3.md Phase G: a cheap "quick double" for thickening/harmony -
+        # see beatstudio.lz's `double` command for the real pitch+tempo
+        # tradeoff this makes (disclosed there, not hidden here either).
+        "double": bool(fx_in.get("double", False)),
+        "doubleSemitones": double_semitones,
     }
     return {"takes": takes, "fx": fx}
 
