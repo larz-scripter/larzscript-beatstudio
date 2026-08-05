@@ -1157,12 +1157,31 @@ fn cmd_record(a) {
   print("recorded " + seconds + "s -> " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s track '" + name + "'")
 }
 
+# Real, chunked peak measurement (never holds the whole track in
+# memory, same discipline as everything else that walks a long track -
+# see this file's own header comment on why that matters on a 1.9GB
+# production box) - the building block for real gain-staging below.
+fn measure_peak(track) {
+  let total = track["total_samples"]
+  let peak = 0.0
+  let pos = 0
+  while pos < total {
+    let this_len = total - pos
+    if this_len > CHUNK_SAMPLES { this_len = CHUNK_SAMPLES }
+    let buf = track_read(track, pos, this_len)
+    let pk = _native_peak_abs(buf)
+    if pk > peak { peak = pk }
+    pos = pos + this_len
+  }
+  return peak
+}
+
 fn cmd_track_import(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
-  if len(a["positional"]) < 1 { fail("usage: track-import WAVPATH --name=NAME") }
+  if len(a["positional"]) < 1 { fail("usage: track-import WAVPATH --name=NAME [--auto-gain]") }
   let src = a["positional"][0]
   let name = argmod.flag(a, "name", nil)
-  if name == nil { fail("usage: track-import WAVPATH --name=NAME") }
+  if name == nil { fail("usage: track-import WAVPATH --name=NAME [--auto-gain]") }
   if not fs.exists(src) { fail("no such file: " + src) }
   let p = load_project(path)
   let out_path = dir_of(path) + "/" + name + ".wav"
@@ -1170,9 +1189,39 @@ fn cmd_track_import(a) {
   let info = probe_wav(out_path)
   let track = {"name": name, "path": out_path, "data_start": info["data_start"],
                "total_samples": info["total_samples"], "gain_db": 0.0, "pan": 0.0, "mute": false}
+
+  # Real gain-staging (not audio processing - only this track's own
+  # gain_db field changes, same as any other mixer gain adjustment).
+  # Found via a real production incident: a user's mic recorded at
+  # -70.3dBFS peak, and even the mixer's max +12dB manual gain couldn't
+  # rescue that (would still land around -58dBFS, inaudible against a
+  # normally-mixed beat) - a fixed default gain assumes a "normal" input
+  # level that real microphones/browsers/devices don't reliably provide.
+  # --auto-gain measures the REAL peak and computes a starting gain that
+  # brings it to a sane target automatically, the same way real vocal
+  # chains/interfaces do input gain-staging.
+  let gain_note = ""
+  if a["flags"].has("auto-gain") {
+    let peak = measure_peak(track)
+    if peak > 0.0 {
+      let peak_db = dsp.linear_to_db(peak)
+      let target_db = -12.0
+      let computed = target_db - peak_db
+      # Wider than the UI's own exposed mixer-slider range on purpose -
+      # this is the computed STARTING point (a real rescue for a
+      # pathologically quiet mic), not a value a visitor is expected to
+      # dial in by hand; the UI's slider range is a separate, smaller
+      # fine-tuning control layered on top of this.
+      if computed < -24.0 { computed = -24.0 }
+      if computed > 40.0 { computed = 40.0 }
+      track["gain_db"] = computed
+      gain_note = ", auto-gain: " + str(round(computed, 1)) + "dB (measured peak " + str(round(peak_db, 1)) + "dBFS)"
+    }
+  }
+
   upsert_track(p, track)
   save_project(path, p)
-  print("imported " + src + " as track '" + name + "' (" + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s)")
+  print("imported " + src + " as track '" + name + "' (" + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s)" + gain_note)
 }
 
 # ---- vocal editing: trim, fade, noise gate, de-ess -----------------
@@ -2215,7 +2264,7 @@ cli.command(app, "generate", "auto-generate a genre beat + chord progression (fr
 cli.command(app, "beat-render", "synthesize the arrangement (or just 'main') to a track (free)", fn(a) { cmd_beat_render(a) })
 cli.command(app, "melody-render", "synthesize the bass+chords arrangement to its own track (free): needs 'generate' run first", fn(a) { cmd_melody_render(a) })
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })
-cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
+cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME [--auto-gain measures real peak and sets a sane starting level]", fn(a) { cmd_track_import(a) })
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
 cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] [--resample for the older pitch+tempo-together fallback method]", fn(a) { cmd_double(a) })
 cli.command(app, "autotune", "real pitch correction, in place (free, <=180s clips): autotune NAME --strength=0..1 [--key=SEMITONES-FROM-A4] [--scale=major|minor] - 0=off, low=natural, 1=hard-snap", fn(a) { cmd_autotune(a) })

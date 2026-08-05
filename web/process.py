@@ -21,6 +21,7 @@ Job types, distinguished by session status:
                            no re-decode, no re-synthesis.
 All drop results where Apache serves them as static files.
 """
+import copy
 import fcntl
 import glob
 import json
@@ -141,6 +142,22 @@ def project_track_names(project):
         return set(t["name"] for t in p.get("tracks", []))
     except (json.JSONDecodeError, OSError, KeyError):
         return set()
+
+
+def read_track_gain(project, name):
+    """Reads back a track's CURRENT gain_db - used right after
+    track-import --auto-gain so the initial apply_mix call (below) can
+    preserve that real, measured gain-staging value instead of
+    overwriting it with DEFAULT_PARAMS' fixed default."""
+    try:
+        with open(project) as f:
+            p = json.load(f)
+        for t in p.get("tracks", []):
+            if t["name"] == name:
+                return t.get("gain_db")
+    except (json.JSONDecodeError, OSError, KeyError):
+        pass
+    return None
 
 
 def find_take_file(d, index):
@@ -442,7 +459,11 @@ def process_uploaded(session_id, d):
             return
 
     write_status(d, "processing", stage="Adding your recording...")
-    p = run(BEATSTUDIO + ["track-import", vocal_wav, "--name=vocal", "--file=" + project], timeout=300)
+    # --auto-gain: real gain-staging on import, not a cosmetic default -
+    # see beatstudio.lz's own comment on the production incident this
+    # fixes (a mic recording so quiet even max manual gain couldn't
+    # rescue it once mixed).
+    p = run(BEATSTUDIO + ["track-import", vocal_wav, "--name=vocal", "--auto-gain", "--file=" + project], timeout=300)
     if p.returncode != 0:
         write_status(d, "error", message="couldn't add your recording as a track", detail=p.stdout[-800:])
         return
@@ -501,7 +522,13 @@ def process_uploaded(session_id, d):
             write_status(d, "error", message="couldn't create the harmony - does this project have a chord progression? (drums-only beats can't harmonize)", detail=p.stdout[-800:])
             return
 
-    params = DEFAULT_PARAMS
+    # A real deepcopy, not a reference - DEFAULT_PARAMS is a module-level
+    # dict reused across every session; mutating it directly would leak
+    # one session's auto-gain value into every other session's defaults.
+    params = copy.deepcopy(DEFAULT_PARAMS)
+    vocal_gain = read_track_gain(project, "vocal")
+    if vocal_gain is not None:
+        params["tracks"]["vocal"]["gain"] = vocal_gain
     write_status(d, "processing", stage="Setting mix levels...")
     if apply_mix(project, params, "initial mix", d) is not None:
         return

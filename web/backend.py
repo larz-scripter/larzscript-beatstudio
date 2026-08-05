@@ -38,7 +38,12 @@ EXT_BY_TYPE = {
 
 # Server-side clamps - defense in depth, never trust the slider ranges the
 # page itself enforces. Mirrors what beatstudio.lz's own commands accept.
-GAIN_RANGE = (-24.0, 12.0)
+# Widened ceiling (was +12) as a manual-rescue safety net alongside the
+# new auto-gain staging on vocal import (beatstudio.lz's `track-import
+# --auto-gain`) - a real production incident found a mic recording so
+# quiet (-70dBFS peak) that even +12dB couldn't bring it into an
+# audible range once mixed against a normally-mixed beat.
+GAIN_RANGE = (-24.0, 24.0)
 PAN_RANGE = (-1.0, 1.0)
 EQ_RANGE = (-12.0, 12.0)
 THRESH_RANGE = (-40.0, 0.0)
