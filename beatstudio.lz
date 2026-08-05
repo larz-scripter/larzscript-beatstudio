@@ -1213,7 +1213,15 @@ fn cmd_track_import(a) {
       # dial in by hand; the UI's slider range is a separate, smaller
       # fine-tuning control layered on top of this.
       if computed < -24.0 { computed = -24.0 }
-      if computed > 40.0 { computed = 40.0 }
+      # Was 40.0 - a real production case (peak -70.3dBFS) needed 58.3dB to
+      # reach target and measurably proved the point: at the old 40dB cap,
+      # the vocal sat ~38dB under the beat in the actual mix (A/B diff
+      # measured -56.2dBFS vs a -18.2dBFS mix, i.e. functionally silent);
+      # letting it reach the real computed value landed ~20dB under the
+      # beat instead (diff -37.9dBFS), present and audible, with no
+      # clipping (limiter still held peak at -1dBFS). 60 gives a little
+      # headroom beyond that one real case without being unbounded.
+      if computed > 60.0 { computed = 60.0 }
       track["gain_db"] = computed
       gain_note = ", auto-gain: " + str(round(computed, 1)) + "dB (measured peak " + str(round(peak_db, 1)) + "dBFS)"
     }
