@@ -211,20 +211,20 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
 
   <section>
     <h2>Choose your beat</h2>
-    <p class="sub">Pick a genre and tempo, then generate a real pattern — kick/snare/hihat/clap plus open hat, tom, crash and an 808, arranged into intro/groove/fill/outro. Regenerate as many times as you like, entirely free.</p>
+    <p class="sub">Pick a genre and tempo, then generate a real pattern — kick/snare/hihat/clap plus open hat, tom, crash and an 808, arranged into intro/groove/fill/outro. Every generation draws from a real, large pool of drum grooves, chord progressions and keys per genre, so regenerating actually gives you something different, not the same track again. Regenerate as many times as you like, entirely free.</p>
     <div class="rec-panel">
       <div class="genre-row" id="genre-row">
+        <button class="genre-chip active" data-genre="larz">&#9733; Larz</button>
         <button class="genre-chip" data-genre="trap">Trap</button>
-        <button class="genre-chip" data-genre="lofi">Lo-fi</button>
-        <button class="genre-chip active" data-genre="boombap">Boom Bap</button>
-        <button class="genre-chip" data-genre="pop">Pop</button>
+        <button class="genre-chip" data-genre="hiphop">Hip-Hop</button>
+        <button class="genre-chip" data-genre="rnb">R&amp;B</button>
         <button class="genre-chip" data-genre="afrobeat">Afrobeat</button>
-        <button class="genre-chip" data-genre="house">House</button>
       </div>
+      <p class="sub" style="margin:8px 0 0"><b>Larz</b> is our own signature genre — a real blend of Afrobeat, Hip-Hop, R&amp;B and Trap, with by far the biggest variety pool of any genre here. <a href="docs/#larz-genre" target="_blank" style="color:var(--hot);text-decoration:none">What makes it different?</a></p>
       <div class="ctrl-row" style="margin-top:18px">
         <label>Tempo</label>
-        <input type="range" id="bpm-slider" min="60" max="200" step="1" value="90">
-        <span class="val" id="bpm-val">90 BPM</span>
+        <input type="range" id="bpm-slider" min="60" max="200" step="1" value="100">
+        <span class="val" id="bpm-val">100 BPM</span>
       </div>
       <label class="melody-toggle"><input type="checkbox" id="melody-toggle" checked> Bass &amp; chords <span class="hint">— a real generated chord progression under the drums, genre-matched. Uncheck for drums only.</span></label>
       <div class="section-label" style="margin-top:18px">Song length</div>
@@ -682,8 +682,8 @@ function makeSimpleDeck(name, src){
 // ---- beat generation (genre + tempo -> a real generated pattern) ----
 const sessionId = "bs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-const GENRE_DEFAULT_BPM = { trap: 140, lofi: 80, boombap: 90, pop: 120, afrobeat: 105, house: 128 };
-let currentBeat = { genre: "boombap", bpm: 90, targetSeconds: 0 };
+const GENRE_DEFAULT_BPM = { larz: 100, trap: 140, hiphop: 90, rnb: 78, afrobeat: 105 };
+let currentBeat = { genre: "larz", bpm: 100, targetSeconds: 0 };
 let beatReady = false;
 let beatgenDeck = null;
 

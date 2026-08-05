@@ -91,7 +91,11 @@ TARGET_LUFS_RANGE = (-40.0, -6.0)
 
 # Mirrors beatstudio.lz's own GENRES list - kept in sync by hand (small,
 # rarely-changing list; not worth a shared-file mechanism for six names).
-GENRES = ("trap", "lofi", "boombap", "pop", "afrobeat", "house")
+# PLAN9.md: focused down to the 4 genres actually wanted + "larz", the
+# new signature blend of all 4 (biggest variety pool on purpose - see
+# beatstudio.lz's GENRE_GROOVE_POOLS). Dropped lofi/pop/house; renamed
+# boombap -> hiphop.
+GENRES = ("larz", "trap", "hiphop", "rnb", "afrobeat")
 BPM_RANGE = (60.0, 200.0)
 BARS_RANGE = (1, 16)
 # PLAN4.md Phase I - a real, length-scaled verse/chorus/bridge structure.

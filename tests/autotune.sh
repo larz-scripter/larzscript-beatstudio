@@ -2,7 +2,7 @@
 F="$1"
 D="$(dirname "$F")"
 $BEATSTUDIO init --budget=20 --bpm=120 --file="$F"
-$BEATSTUDIO generate pop --bars=1 --seed=3 --file="$F"
+$BEATSTUDIO generate larz --bars=1 --seed=3 --file="$F"
 $BEATSTUDIO beat-render --file="$F"
 $BEATSTUDIO track-import "$D/beat.wav" --name=vox --file="$F"
 $BEATSTUDIO autotune vox --strength=0 --file="$F"

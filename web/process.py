@@ -77,12 +77,20 @@ def _fingerprint_conn():
 def _project_fingerprint(project):
     """The audible musical identity of a generated project - deliberately
     NOT the seed or the raw audio (two seeds can land on the identical
-    variant/progression/key by chance and that's fine, still the same
+    groove/progression/key by chance and that's fine, still the same
     perceived identity; conversely two DIFFERENT identities should never
-    collide just because of an unrelated seed difference)."""
+    collide just because of an unrelated seed difference).
+
+    PLAN9.md: `groove` replaced PLAN7's single `variant` int - it's a
+    whole dict (kick/accent/tom/hats/808, see beatstudio.lz's
+    choose_groove) picked from independent per-voice pools, so hashing
+    its full repr here is what actually captures "the same drum
+    identity" now - a partial/wrong hash would silently let two
+    genuinely different grooves share a fingerprint (never re-rolling
+    when they should) or the reverse."""
     with open(project) as f:
         p = json.load(f)
-    parts = [p.get("genre"), p.get("bpm"), p.get("variant"), p.get("progression_variant"),
+    parts = [p.get("genre"), p.get("bpm"), p.get("groove"), p.get("progression_variant"),
              p.get("key_root_semitone"), p.get("melody_enabled"), len(p.get("arrangement", []))]
     raw = "|".join(str(x) for x in parts)
     return hashlib.sha1(raw.encode()).hexdigest()
@@ -106,7 +114,7 @@ def _record_fingerprint(conn, fp):
 # always-available fallback rather than a hard failure. bars=4 matches
 # the arrangement length ("intro*2,main*4,fill,main*2,outro") the
 # original hand-authored demo beat used.
-DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1, "melody": True, "targetSeconds": 0,
+DEFAULT_BEAT = {"genre": "larz", "bpm": 100.0, "bars": 4, "seed": 1, "melody": True, "targetSeconds": 0,
                 "customUpload": False}
 
 DEFAULT_STRIP = {"eqLow": 0.0, "eqMid": 0.0, "eqHigh": 0.0, "compThresh": 0.0, "compRatio": 3.0,

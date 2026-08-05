@@ -1,5 +1,5 @@
 project created: bpm=140, budget=$20.00
-generated trap beat: bpm=140 seed=7 variant=1 -> 8 bars (13.7s), melody: key=-12 [{deg: 0, q: minor}, {deg: 10, q: major}, {deg: 8, q: major}, {deg: 10, q: major}]
+generated trap beat: bpm=140 seed=7 groove={kick: [0, 6, 10], accent_voice: clap, accent: [4, 12, 14], tom: [], sub808: true, hat_prob: 0.75, hat_start: 0, hat_step: 1, ohat_positions: [6, 14], ohat_prob: 0.5} -> 8 bars (13.7s), melody: key=-15 [{deg: 0, q: minor}, {deg: 5, q: minor}, {deg: 3, q: major}, {deg: 10, q: major}]
 beat rendered: 13.71s -> PROJECT_DIR/beat.wav
 melody rendered: 13.71s -> PROJECT_DIR/melody.wav
 beat: gain=0dB pan=0 mute=false
@@ -7,7 +7,7 @@ melody: gain=-4dB pan=0 mute=false
 preview (free, mix + safety limiter only, no EQ/compression): PROJECT_DIR/preview.wav
 peak: -1 dBFS
 mastered -> PROJECT_DIR/master_1.wav
-peak: -1 dBFS, rms: -16.79 dBFS
+peak: -1 dBFS, rms: -16.51 dBFS
 charged: $1.00, remaining: $19.00
 bpm: 140
 
@@ -15,9 +15,9 @@ pattern 'fill':
 | Voice  | Steps            |
 |--------|------------------|
 | kick   | X.....X...X..... |
-| snare  | ..X...X...X...X. |
-| hihat  | X.XX.XXX..XXXXXX |
-| clap   | ....X.......X... |
+| snare  | ................ |
+| hihat  | .XX.XXXXXX.XXXX. |
+| clap   | ..X.X.....X.X.X. |
 | ohat   | ..............X. |
 | tom    | ................ |
 | crash  | X............... |
@@ -28,26 +28,26 @@ pattern 'intro':
 |--------|------------------|
 | kick   | X............... |
 | snare  | ................ |
-| hihat  | X.....X.X.....X. |
+| hihat  | ..X.X.....X..... |
 | clap   | ................ |
 | ohat   | ................ |
 | tom    | ................ |
 | crash  | ................ |
-| sub808 | ................ |
+| sub808 | X............... |
 
 pattern 'main':
 | Voice  | Steps            |
 |--------|------------------|
 | kick   | X.....X...X..... |
 | snare  | ................ |
-| hihat  | XXXX..XXX.XXXXXX |
-| clap   | ....X.......X... |
-| ohat   | ..............X. |
+| hihat  | ..XX.XXX..XX.XXX |
+| clap   | ....X.......X.X. |
+| ohat   | ......X.......X. |
 | tom    | ................ |
 | crash  | ................ |
 | sub808 | X.....X...X..... |
 
-melody: key=-12 semitones from A4, progression loop: [{deg: 0, q: minor}, {deg: 10, q: major}, {deg: 8, q: major}, {deg: 10, q: major}]
+melody: key=-15 semitones from A4, progression loop: [{deg: 0, q: minor}, {deg: 5, q: minor}, {deg: 3, q: major}, {deg: 10, q: major}]
 
 arrangement (8 bars, 13.7s): [intro, intro, main, main, fill, main, main, intro]
 

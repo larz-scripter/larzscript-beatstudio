@@ -110,6 +110,38 @@ default (override with `--file=PATH` on any command).
 | `master --price=DOLLARS [--low=DB --mid=DB --high=DB --thresh=DB --ratio=N --ceiling=DB]` | Paid. The full EQ → linked-stereo compressor → limiter chain; rejects if the project wallet can't afford it. |
 | `remaster [--low=DB --mid=DB --high=DB --thresh=DB --ratio=N --ceiling=DB]` | Free, but only after this project's first `master`. Re-renders with new settings without re-charging - built for iterating on a mix. |
 | `report` | Show the pattern, tracks (with lengths), last master's stats, and remaining budget. |
+| `generate GENRE [--bpm=] [--bars=] [--seed=] [--progression=N] [--key=N] [--no-melody] [--target-seconds=N]` | Free. Auto-generates a real drum pattern + chord progression for `GENRE` (see "Genres" below) and writes it as the `beat`/`melody` source patterns. |
+
+## Genres
+
+`generate` picks from **5 genres**: `trap`, `hiphop`, `rnb`, `afrobeat`,
+and `larz` - our own signature genre (see below). Each genre defines
+real, independent pools of building blocks - which steps the kick sits
+on, which voice carries the backbeat (clap or snare) and where, whether
+a tom or an 808 layers in, how dense/swung the hi-hats are, plus a pool
+of real chord progressions and key roots - and `generate` rolls one
+concrete choice from each pool per call (deterministically, from
+`--seed`). The point of pools instead of one fixed pattern per genre:
+the real combinatorial space is the *product* of every pool's size, not
+just a count of hand-written variations, so regenerating the same genre
+gives you something genuinely different far more often than a small
+fixed set of pre-baked variants ever could.
+
+**The Larz genre** is a deliberate blend of the other 4's rhythmic and
+harmonic DNA - its kick pool is a real union of trap-flavored, hip-hop-
+flavored, afrobeat-flavored and R&B-flavored patterns (plus a couple of
+genuine hybrids), its chord-progression pool borrows 2 progressions from
+each of the other 4 genres, and its key pool spans both the
+minor-leaning center the trap/hip-hop world anchors on and the
+major/7th-leaning center R&B/afrobeat anchor on. It's intentionally
+given the **biggest pool of any genre here** - a "larz" beat can land
+anywhere from "trap kick with afrobeat percussion" to "R&B backbeat
+under a hip-hop groove," not one fixed in-between compromise.
+
+```
+$ larzscript beatstudio.lz generate larz --bars=2 --seed=42
+generated larz beat: bpm=100 seed=42 groove={kick: [0, 3, 10], accent_voice: snare, accent: [4, 12, 14], tom: [10, 13], sub808: true, hat_prob: 0.6, hat_start: 2, hat_step: 1, ohat_positions: [], ohat_prob: 0.4} -> 8 bars (19.2s), melody: key=-21 [{deg: 0, q: minor}, {deg: 8, q: major}, {deg: 3, q: major}, {deg: 10, q: major}]
+```
 
 ## The mastering chain
 

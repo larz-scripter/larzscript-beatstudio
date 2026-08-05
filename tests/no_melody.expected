@@ -1,27 +1,27 @@
 project created: bpm=120, budget=$20.00
-generated pop beat: bpm=120 seed=3 variant=1 -> 8 bars (16s), melody: disabled
-beat rendered: 16s -> PROJECT_DIR/beat.wav
+generated larz beat: bpm=100 seed=3 groove={kick: [0, 7], accent_voice: snare, accent: [6, 14], tom: [10, 13], sub808: false, hat_prob: 0.6, hat_start: 0, hat_step: 1, ohat_positions: [], ohat_prob: 0.4} -> 8 bars (19.2s), melody: disabled
+beat rendered: 19.2s -> PROJECT_DIR/beat.wav
 melody disabled for this project (generate was run with --no-melody)
-bpm: 120
+bpm: 100
 
 pattern 'fill':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.....X.X....... |
-| snare  | ................ |
-| hihat  | X.XXXXXXXXXXXXXX |
-| clap   | ..X.X.....X.X... |
-| ohat   | ..............X. |
-| tom    | ................ |
+| kick   | X......X........ |
+| snare  | ..X...X...X...X. |
+| hihat  | .XXX..XX.X...XXX |
+| clap   | ................ |
+| ohat   | ................ |
+| tom    | ..........X..X.. |
 | crash  | X............... |
 | sub808 | ................ |
 
 pattern 'intro':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | ................ |
+| kick   | X............... |
 | snare  | ................ |
-| hihat  | X.X.X.X.X.X.X.X. |
+| hihat  | ..X.X...X.X.X.X. |
 | clap   | ................ |
 | ohat   | ................ |
 | tom    | ................ |
@@ -31,21 +31,21 @@ pattern 'intro':
 pattern 'main':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.....X.X....... |
-| snare  | ................ |
-| hihat  | XXX.X.XXXXXXX.XX |
-| clap   | ....X.......X... |
+| kick   | X......X........ |
+| snare  | ......X.......X. |
+| hihat  | XX..XXX.XX.X.XX. |
+| clap   | ................ |
 | ohat   | ................ |
-| tom    | ................ |
+| tom    | ..........X..X.. |
 | crash  | ................ |
 | sub808 | ................ |
 
-melody: key=-18 semitones from A4, progression loop: disabled (--no-melody)
+melody: key=-15 semitones from A4, progression loop: disabled (--no-melody)
 
-arrangement (8 bars, 16s): [intro, intro, main, main, fill, main, main, intro]
+arrangement (8 bars, 19.2s): [intro, intro, main, main, fill, main, main, intro]
 
 | Track | Length (s) | Gain (dB) | Pan | Mute  |
 |-------|------------|-----------|-----|-------|
-| beat  | 16         | 0         | 0   | false |
+| beat  | 19.2       | 0         | 0   | false |
 
 budget: $20.00  spent: $0.00  remaining: $20.00

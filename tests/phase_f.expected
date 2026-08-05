@@ -1,5 +1,5 @@
 project created: bpm=140, budget=$20.00
-generated trap beat: bpm=140 seed=11 variant=1 -> 8 bars (13.7s), melody: key=-14 [{deg: 0, q: minor}, {deg: 8, q: major}, {deg: 3, q: major}, {deg: 10, q: major}]
+generated trap beat: bpm=140 seed=11 groove={kick: [0, 3, 6, 10], accent_voice: clap, accent: [4, 11], tom: [], sub808: false, hat_prob: 0.85, hat_start: 0, hat_step: 1, ohat_positions: [14], ohat_prob: 0.5} -> 8 bars (13.7s), melody: key=-15 [{deg: 0, q: minor}, {deg: 8, q: major}, {deg: 3, q: major}, {deg: 10, q: major}]
 beat rendered: 13.71s -> PROJECT_DIR/beat.wav
 melody rendered: 13.71s -> PROJECT_DIR/melody.wav
 beat: eq(0/0/0dB) comp(nildB xnil) duck_from=melody delay(0ms fb=0 mix=0) reverb(mix=0 fb=0)
@@ -7,9 +7,9 @@ melody: eq(-6/0/3dB) comp(-20dB x4) duck_from=nil delay(200ms fb=0.35 mix=0.3) r
 beat: gain=0dB pan=0 mute=false
 melody: gain=-6dB pan=0 mute=false
 preview (free, mix + safety limiter only, no EQ/compression): PROJECT_DIR/preview.wav
-peak: -2.8 dBFS
+peak: -2.81 dBFS
 mastered -> PROJECT_DIR/master_1.wav
-peak: -1 dBFS, rms: -19.11 dBFS
+peak: -1 dBFS, rms: -19.37 dBFS
 charged: $1.00, remaining: $19.00
 melody: eq(0/0/0dB) comp(nildB xnil) duck_from=nil delay(0ms fb=0 mix=0) reverb(mix=0 fb=0)
 bpm: 140
@@ -17,21 +17,21 @@ bpm: 140
 pattern 'fill':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.....X...X..... |
-| snare  | ..X...X...X...X. |
-| hihat  | XXXXX.XXXXXX.XXX |
-| clap   | ....X.......X... |
-| ohat   | ................ |
+| kick   | X..X..X...X..... |
+| snare  | ................ |
+| hihat  | X.XXX.XXX.X.XXXX |
+| clap   | ..X.X.....XX.... |
+| ohat   | ..............X. |
 | tom    | ................ |
 | crash  | X............... |
-| sub808 | X.....X...X..... |
+| sub808 | ................ |
 
 pattern 'intro':
 | Voice  | Steps            |
 |--------|------------------|
 | kick   | X............... |
 | snare  | ................ |
-| hihat  | X.....X.X.....X. |
+| hihat  | X.X.....X.X.X... |
 | clap   | ................ |
 | ohat   | ................ |
 | tom    | ................ |
@@ -41,16 +41,16 @@ pattern 'intro':
 pattern 'main':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.....X...X..... |
+| kick   | X..X..X...X..... |
 | snare  | ................ |
-| hihat  | X.XXXXXXXXXX.XXX |
-| clap   | ....X.......X... |
+| hihat  | XXXXXXXXXXXX.XXX |
+| clap   | ....X......X.... |
 | ohat   | ................ |
 | tom    | ................ |
 | crash  | ................ |
-| sub808 | X.....X...X..... |
+| sub808 | ................ |
 
-melody: key=-14 semitones from A4, progression loop: [{deg: 0, q: minor}, {deg: 8, q: major}, {deg: 3, q: major}, {deg: 10, q: major}]
+melody: key=-15 semitones from A4, progression loop: [{deg: 0, q: minor}, {deg: 8, q: major}, {deg: 3, q: major}, {deg: 10, q: major}]
 
 arrangement (8 bars, 13.7s): [intro, intro, main, main, fill, main, main, intro]
 

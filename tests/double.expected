@@ -1,58 +1,58 @@
 project created: bpm=120, budget=$20.00
-generated pop beat: bpm=120 seed=5 variant=1 -> 7 bars (14s), melody: key=-18 [{deg: 9, q: minor}, {deg: 5, q: major}, {deg: 0, q: major}, {deg: 7, q: major}]
-beat rendered: 14s -> PROJECT_DIR/beat.wav
-imported PROJECT_DIR/beat.wav as track 'vox' (14s)
-vox_double: 14s -> PROJECT_DIR/vox_double.wav (0.15 semitones from 'vox', tempo-preserving pitch shift)
-vox_harmony: 14s -> PROJECT_DIR/vox_harmony.wav (4 semitones from 'vox', tempo-preserving pitch shift)
-vox_harmony_low: 14s -> PROJECT_DIR/vox_harmony_low.wav (-4 semitones from 'vox', tempo-preserving pitch shift)
-bpm: 120
+generated larz beat: bpm=100 seed=5 groove={kick: [0, 3, 8, 11], accent_voice: snare, accent: [4, 12], tom: [], sub808: true, hat_prob: 0.8, hat_start: 0, hat_step: 2, ohat_positions: [6], ohat_prob: 0.4} -> 7 bars (16.8s), melody: key=-24 [{deg: 0, q: minor}, {deg: 10, q: major}, {deg: 8, q: major}, {deg: 10, q: major}]
+beat rendered: 16.8s -> PROJECT_DIR/beat.wav
+imported PROJECT_DIR/beat.wav as track 'vox' (16.8s)
+vox_double: 16.8s -> PROJECT_DIR/vox_double.wav (0.15 semitones from 'vox', tempo-preserving pitch shift)
+vox_harmony: 16.8s -> PROJECT_DIR/vox_harmony.wav (4 semitones from 'vox', tempo-preserving pitch shift)
+vox_harmony_low: 16.8s -> PROJECT_DIR/vox_harmony_low.wav (-4 semitones from 'vox', tempo-preserving pitch shift)
+bpm: 100
 
 pattern 'fill':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.....X.X....... |
-| snare  | ................ |
-| hihat  | XXXXXXXXXXXXX.XX |
-| clap   | ..X.X.....X.X... |
-| ohat   | ..............X. |
+| kick   | X..X....X..X.... |
+| snare  | ..X.X.X...X.X.X. |
+| hihat  | X.X.X.X.X.X.X.XX |
+| clap   | ................ |
+| ohat   | ......X......... |
 | tom    | ................ |
 | crash  | X............... |
-| sub808 | ................ |
+| sub808 | X..X....X..X.... |
 
 pattern 'intro':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | ................ |
+| kick   | X............... |
 | snare  | ................ |
-| hihat  | X.X.X.X.X.X.X.X. |
+| hihat  | X...X...X....... |
 | clap   | ................ |
 | ohat   | ................ |
 | tom    | ................ |
 | crash  | ................ |
-| sub808 | ................ |
+| sub808 | X............... |
 
 pattern 'main':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.....X.X....... |
-| snare  | ................ |
-| hihat  | XXX.XXXXXXXXX.X. |
-| clap   | ....X.......X... |
-| ohat   | ................ |
+| kick   | X..X....X..X.... |
+| snare  | ....X.......X... |
+| hihat  | X.X...X.X.X...X. |
+| clap   | ................ |
+| ohat   | ......X......... |
 | tom    | ................ |
 | crash  | ................ |
-| sub808 | ................ |
+| sub808 | X..X....X..X.... |
 
-melody: key=-18 semitones from A4, progression loop: [{deg: 9, q: minor}, {deg: 5, q: major}, {deg: 0, q: major}, {deg: 7, q: major}]
+melody: key=-24 semitones from A4, progression loop: [{deg: 0, q: minor}, {deg: 10, q: major}, {deg: 8, q: major}, {deg: 10, q: major}]
 
-arrangement (7 bars, 14s): [intro, intro, main, fill, main, main, intro]
+arrangement (7 bars, 16.8s): [intro, intro, main, fill, main, main, intro]
 
 | Track           | Length (s) | Gain (dB) | Pan | Mute  |
 |-----------------|------------|-----------|-----|-------|
-| beat            | 14         | 0         | 0   | false |
-| vox             | 14         | 0         | 0   | false |
-| vox_double      | 14         | -4        | 0   | false |
-| vox_harmony     | 14         | -6        | 0   | false |
-| vox_harmony_low | 14         | -4        | 0   | false |
+| beat            | 16.8       | 0         | 0   | false |
+| vox             | 16.8       | 0         | 0   | false |
+| vox_double      | 16.8       | -4        | 0   | false |
+| vox_harmony     | 16.8       | -6        | 0   | false |
+| vox_harmony_low | 16.8       | -4        | 0   | false |
 
 budget: $20.00  spent: $0.00  remaining: $20.00
