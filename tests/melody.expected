@@ -7,7 +7,7 @@ melody: gain=-4dB pan=0 mute=false
 preview (free, mix + safety limiter only, no EQ/compression): PROJECT_DIR/preview.wav
 peak: -1 dBFS
 mastered -> PROJECT_DIR/master_1.wav
-peak: -1 dBFS, rms: -16.93 dBFS
+peak: -1 dBFS, rms: -17.1 dBFS
 charged: $1.00, remaining: $19.00
 bpm: 140
 

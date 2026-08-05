@@ -1,0 +1,58 @@
+project created: bpm=120, budget=$20.00
+generated pop beat: bpm=120 seed=5 -> 7 bars (14s), melody: key=-21 [{deg: 0, q: major}, {deg: 7, q: major}, {deg: 9, q: minor}, {deg: 5, q: major}]
+beat rendered: 14s -> PROJECT_DIR/beat.wav
+imported PROJECT_DIR/beat.wav as track 'vox' (14s)
+vox_double: 13.88s -> PROJECT_DIR/vox_double.wav (0.15 semitones from 'vox', pitch+tempo both shifted)
+vox_harmony: 11.11s -> PROJECT_DIR/vox_harmony.wav (4 semitones from 'vox', pitch+tempo both shifted)
+vox_harmony_low: 17.64s -> PROJECT_DIR/vox_harmony_low.wav (-4 semitones from 'vox', pitch+tempo both shifted)
+bpm: 120
+
+pattern 'fill':
+| Voice  | Steps            |
+|--------|------------------|
+| kick   | X.......X....... |
+| snare  | ................ |
+| hihat  | XXXXX.X.X.XXX.XX |
+| clap   | ..X.X.....X.X... |
+| ohat   | ................ |
+| tom    | ................ |
+| crash  | X............... |
+| sub808 | ................ |
+
+pattern 'intro':
+| Voice  | Steps            |
+|--------|------------------|
+| kick   | ................ |
+| snare  | ................ |
+| hihat  | X...X...X...X... |
+| clap   | ................ |
+| ohat   | ................ |
+| tom    | ................ |
+| crash  | ................ |
+| sub808 | ................ |
+
+pattern 'main':
+| Voice  | Steps            |
+|--------|------------------|
+| kick   | X.......X....... |
+| snare  | ................ |
+| hihat  | X.X.X.X.X.X.X.X. |
+| clap   | ....X.......X... |
+| ohat   | ..............X. |
+| tom    | ................ |
+| crash  | ................ |
+| sub808 | ................ |
+
+melody: key=-21 semitones from A4, progression loop: [{deg: 0, q: major}, {deg: 7, q: major}, {deg: 9, q: minor}, {deg: 5, q: major}]
+
+arrangement (7 bars, 14s): [intro, intro, main, fill, main, main, intro]
+
+| Track           | Length (s) | Gain (dB) | Pan | Mute  |
+|-----------------|------------|-----------|-----|-------|
+| beat            | 14         | 0         | 0   | false |
+| vox             | 14         | 0         | 0   | false |
+| vox_double      | 13.9       | -4        | 0   | false |
+| vox_harmony     | 11.1       | -6        | 0   | false |
+| vox_harmony_low | 17.6       | -4        | 0   | false |
+
+budget: $20.00  spent: $0.00  remaining: $20.00

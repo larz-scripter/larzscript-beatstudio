@@ -683,14 +683,36 @@ let CHROMATIC_RATIOS = [
   1.414213562, 1.498307077, 1.587401052, 1.681792831, 1.781797436, 1.887748625,
 ]
 
-# base_freq is the frequency AT semitone 0; `semitones` can be any
-# integer, negative included. Octave shift is plain doubling/halving -
+# base_freq is the frequency AT semitone 0; `semitones` can be any real
+# number (negative included, and fractional - Phase G's subtle "quick
+# double" detune uses e.g. 0.15). Octave shift is plain doubling/halving -
 # exact, and the only "power of 2" any of this needs.
+#
+# Two real bugs found here via signal analysis while verifying Phase G's
+# `double` command, not caught by review: (1) this originally used `//`
+# (which Larzscript floors correctly for negative numbers, confirmed:
+# -4 // 12 = -1) TOGETHER with a manual "if within < 0" floor-correction
+# that assumed `//` truncated toward zero instead - double-applying the
+# correction and landing a whole octave off for any negative semitone
+# value (measured: -4 semitones came out exactly 2x too low instead of
+# the correct ~0.79 ratio). (2) `within` was computed with `%`, which
+# for a FRACTIONAL semitones value produced a fractional list index into
+# CHROMATIC_RATIOS - silently truncated by list indexing, so 0.15
+# semitones resolved to index 0 (ratio exactly 1.0, i.e. no pitch shift
+# at all) instead of a genuinely detuned ratio. Fixed by deriving `within`
+# by subtraction from the (correctly floored) octave instead of a second,
+# inconsistent modulo, and by linearly interpolating between the two
+# neighboring semitone ratios for the fractional remainder - exact at
+# integer semitones (frac=0 reduces to CHROMATIC_RATIOS[within] exactly,
+# so Phase E's chord/bass math, all integer semitones, is unaffected).
 fn note_freq(base_freq, semitones) {
-  let octave = semitones // 12
-  let within = semitones % 12
-  if within < 0 { within = within + 12; octave = octave - 1 }
-  let f = base_freq * CHROMATIC_RATIOS[within]
+  let octave = floor(semitones / 12.0)
+  let rem = semitones - octave * 12.0
+  let within = int(rem)
+  let frac = rem - within
+  let r0 = CHROMATIC_RATIOS[within]
+  let r1 = within < 11 ? CHROMATIC_RATIOS[within + 1] : CHROMATIC_RATIOS[0] * 2.0
+  let f = base_freq * (r0 + (r1 - r0) * frac)
   let k = 0
   while k < octave { f = f * 2.0; k = k + 1 }
   while k > octave { f = f / 2.0; k = k - 1 }
@@ -1206,6 +1228,78 @@ fn cmd_voice_edit(a) {
         "s, fade_out=" + str(fade_out_s) + "s, gate=" + str(do_gate) + ", deess=" + str(do_deess) + ")")
 }
 
+# A cheap "double"/harmony effect (PLAN3.md Phase G): resample the track
+# to shift its playback rate by a musical interval (reusing Phase E's
+# note_freq(1.0, semitones) as a pure frequency-ratio helper), which
+# raises/lowers pitch by genuinely changing speed too - a REAL, disclosed
+# limitation, not hidden: this is a cheap "quick double" trick (a small
+# fraction of a semitone reads as a natural chorus/thickening effect
+# without an audible tempo change), not true independent pitch-shifting.
+# True pitch-shift needs a phase vocoder / FFT-based time-stretch, which
+# this stack has no infrastructure for anywhere (same disclosed gap
+# PLAN3.md's own Phase G scope calls out for pitch-correction/autotune) -
+# a real, bigger feasibility spike if ever wanted, not bundled here.
+#
+# Deliberately whole-buffer, not chunked, unlike everything else in this
+# file: dsp.resample() needs continuous context to interpolate correctly,
+# and chunking a time-stretch without care introduces real audible
+# discontinuities at chunk boundaries - correctness, not just memory,
+# would suffer. Since this operates on a single short vocal take/clip
+# (not the full multi-minute mixed arrangement those chunked paths exist
+# for), a disclosed length ceiling keeps this honest about the real
+# memory cost instead of silently risking the OOM this file's own header
+# comment measured on the production box (~110 bytes/list element) -
+# 180s is a real, calibrated margin under 1.9GB, not an arbitrary number.
+let DOUBLE_MAX_SECONDS = 180.0
+
+fn cmd_double(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 { fail("usage: double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME]") }
+  let name = a["positional"][0]
+  let p = load_project(path)
+  let idx = find_track(p, name)
+  if idx < 0 { fail("no track named '" + name + "'") }
+  let track = p["tracks"][idx]
+  let duration_s = track["total_samples"] / float(SAMPLE_RATE)
+  if duration_s > DOUBLE_MAX_SECONDS {
+    fail("'" + name + "' is " + str(round(duration_s, 1)) + "s - double/harmony only supports up to " +
+         str(DOUBLE_MAX_SECONDS) + "s clips (it needs the whole track in memory at once, unlike the " +
+         "chunked-streaming mix/master path - see this command's own comment for why)")
+  }
+  # Default 0.15 semitones (~15 cents): a natural "quick double" thickening
+  # effect with no audible pitch/tempo change. A real harmony interval
+  # (e.g. --semitones=4 for a major third) works the same way, just with
+  # the pitch/tempo shift now genuinely audible - that tradeoff is real
+  # and disclosed above, not hidden behind a friendlier default.
+  let semitones = float(argmod.flag(a, "semitones", "0.15"))
+  let gain_db = float(argmod.flag(a, "gain", "-4.0"))
+  let new_name = argmod.flag(a, "as", name + "_double")
+
+  let samples = track_read(track, 0, track["total_samples"])
+  let ratio = note_freq(1.0, semitones)
+  # dsp.resample(x, from_rate, to_rate) produces in_n*to_rate/from_rate
+  # samples - to make the clip genuinely PLAY FASTER/HIGHER (ratio > 1
+  # raises pitch), it needs FEWER output samples, so `ratio` goes on
+  # from_rate (the larger side), not to_rate. Caught by real signal
+  # analysis, not assumed: the first version of this line had the two
+  # arguments swapped and produced a LONGER clip for a pitch-UP request -
+  # exactly backwards.
+  let shifted = dsp.resample(samples, SAMPLE_RATE * ratio, SAMPLE_RATE)
+
+  let out_path = dir_of(path) + "/" + new_name + ".wav"
+  let w = wav.open_write(out_path, SAMPLE_RATE, 1)
+  wav.write_chunk(w, shifted)
+  wav.close_write(w)
+
+  let info = probe_wav(out_path)
+  let new_track = {"name": new_name, "path": out_path, "data_start": info["data_start"],
+                    "total_samples": info["total_samples"], "gain_db": gain_db, "pan": 0.0, "mute": false}
+  upsert_track(p, new_track)
+  save_project(path, p)
+  print(new_name + ": " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path +
+        " (" + str(semitones) + " semitones from '" + name + "', pitch+tempo both shifted)")
+}
+
 fn cmd_mix(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   if len(a["positional"]) < 1 { fail("usage: mix NAME --gain=DB --pan=P --mute") }
@@ -1633,6 +1727,7 @@ cli.command(app, "melody-render", "synthesize the bass+chords arrangement to its
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })
 cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
+cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] - changes pitch AND tempo together, see the command's own note", fn(a) { cmd_double(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
 cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--clear]", fn(a) { cmd_strip(a) })
 cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })

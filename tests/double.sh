@@ -1,0 +1,11 @@
+#!/bin/sh
+F="$1"
+D="$(dirname "$F")"
+$BEATSTUDIO init --budget=20 --bpm=120 --file="$F"
+$BEATSTUDIO generate pop --bars=1 --seed=5 --file="$F"
+$BEATSTUDIO beat-render --file="$F"
+$BEATSTUDIO track-import "$D/beat.wav" --name=vox --file="$F"
+$BEATSTUDIO double vox --semitones=0.15 --file="$F"
+$BEATSTUDIO double vox --semitones=4 --as=vox_harmony --gain=-6 --file="$F"
+$BEATSTUDIO double vox --semitones=-4 --as=vox_harmony_low --file="$F"
+$BEATSTUDIO report --file="$F"
