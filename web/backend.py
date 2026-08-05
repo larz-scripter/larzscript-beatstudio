@@ -59,6 +59,11 @@ DOUBLE_SEMITONES_RANGE = (-12.0, 12.0)
 GENRES = ("trap", "lofi", "boombap", "pop", "afrobeat", "house")
 BPM_RANGE = (60.0, 200.0)
 BARS_RANGE = (1, 16)
+# PLAN4.md Phase I - a real, length-scaled verse/chorus/bridge structure.
+# 0 = short mode (the existing --bars= template), matching the user's own
+# answer that generation should stay short/fast-to-iterate by default,
+# with full song length as an explicit opt-in up to 5 minutes.
+TARGET_SECONDS_RANGE = (0.0, 300.0)
 MAX_TAKES = 40
 TRIM_RANGE = (0.0, 600.0)
 GAP_RANGE = (0.0, 30.0)
@@ -184,7 +189,11 @@ def normalize_beat_request(raw):
     # song" unlock, see beatstudio.lz's own header note) - a visitor can
     # still opt out for a drums-only beat via --no-melody.
     melody = bool(raw.get("melody", True))
-    return {"genre": genre, "bpm": bpm, "bars": bars, "seed": seed, "melody": melody}
+    # PLAN4.md Phase I: 0 (default) = short mode, matching the user's own
+    # choice that generation stays fast-to-iterate by default with full
+    # length as an explicit opt-in.
+    target_seconds = clamp(raw.get("targetSeconds", 0), *TARGET_SECONDS_RANGE)
+    return {"genre": genre, "bpm": bpm, "bars": bars, "seed": seed, "melody": melody, "targetSeconds": target_seconds}
 
 
 def normalize_manifest(raw):

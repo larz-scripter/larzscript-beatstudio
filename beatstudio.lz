@@ -660,6 +660,78 @@ fn gen_fill(genre) {
   return pat
 }
 
+# ---- chorus/bridge: real song-section variety (PLAN4.md Phase I) ------
+# A chorus needs to sound like its OWN memorable, repeatable section, not
+# a one-bar turnaround (that's what fill already is) - so it's built as
+# gen_main PLUS fixed, deliberate per-genre layering (not just fill's
+# probabilistic extra hits), the same way a real chorus is usually the
+# verse groove with more energy stacked on top, not a different song.
+fn gen_chorus(genre) {
+  let pat = gen_main(genre)
+  if genre == "trap" {
+    set_steps(pat, "ohat", [6, 14])
+    pat["crash"][0] = true
+    if maybe(0.6) { pat["clap"][8] = true }
+  } else if genre == "lofi" {
+    set_steps(pat, "clap", [0, 8])
+    let s = 1
+    while s < STEPS { if maybe(0.5) { pat["hihat"][s] = true } s = s + 2 }
+  } else if genre == "boombap" {
+    pat["crash"][0] = true
+    set_steps(pat, "snare", [4, 12])
+    if maybe(0.5) { pat["snare"][14] = true }
+  } else if genre == "pop" {
+    set_steps(pat, "ohat", [2, 6, 10, 14])
+    pat["crash"][0] = true
+    let s = 0
+    while s < STEPS { pat["hihat"][s] = true; s = s + 1 }
+  } else if genre == "afrobeat" {
+    set_steps(pat, "tom", [2, 10, 13])
+    pat["crash"][0] = true
+  } else if genre == "house" {
+    pat["crash"][0] = true
+    set_steps(pat, "ohat", [2, 6, 10, 14])
+    let s = 0
+    while s < STEPS { if maybe(0.6) { pat["hihat"][s] = true } s = s + 1 }
+  }
+  return pat
+}
+
+# A bridge/breakdown - real contrast partway through a song via genuine
+# SPACE (fewer active voices), not just a quieter version of the same
+# groove - the way real songs pull back before the final choruses.
+fn gen_bridge(genre) {
+  let pat = empty_pattern()
+  if genre == "trap" { set_steps(pat, "kick", [0]); set_steps(pat, "sub808", [0]); set_steps(pat, "hihat", [0, 8]) }
+  else if genre == "lofi" { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [4, 12]) }
+  else if genre == "boombap" { set_steps(pat, "kick", [0, 10]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+  else if genre == "pop" { set_steps(pat, "kick", [0, 8]) }
+  else if genre == "afrobeat" { set_steps(pat, "kick", [0, 8]); set_steps(pat, "tom", [10]) }
+  else if genre == "house" { set_steps(pat, "kick", [0, 4, 8, 12]) }
+  return pat
+}
+
+# Builds a real, length-scaled song structure - intro, alternating verse/
+# chorus cycles (the "main" pattern IS the verse groove), a bridge for
+# contrast, a final chorus run, outro. `target_bars` is approximate: the
+# number of verse/chorus CYCLES scales to approach it (a real song
+# reaches 5 minutes via more repeats of its sections, not one section
+# stretched arbitrarily long) - reserving fixed space for the
+# intro/bridge/fill/final-chorus/outro bookends that don't scale.
+fn build_full_arrangement(target_bars) {
+  let cycle = ["main", "main", "main", "main", "chorus", "chorus", "chorus", "chorus"]
+  let reserved = 2 + 2 + 1 + 4 + 2
+  let remaining = target_bars - reserved
+  if remaining < len(cycle) { remaining = len(cycle) }
+  let n_cycles = remaining // len(cycle)
+  if n_cycles < 1 { n_cycles = 1 }
+  let out = ["intro", "intro"]
+  let c = 0
+  while c < n_cycles { out.extend(cycle); c = c + 1 }
+  out.extend(["bridge", "bridge", "fill", "chorus", "chorus", "chorus", "chorus", "intro", "intro"])
+  return out
+}
+
 # ---- melodic engine: bass + chords (PLAN3.md Phase E) -----------------
 # "Full song length" was never a duration problem (see render_stream's
 # chunked-streaming design - a 5-minute render already costs the same
@@ -898,17 +970,38 @@ fn cmd_generate(a) {
   p["patterns"]["intro"] = gen_intro(genre)
   p["patterns"]["main"] = gen_main(genre)
   p["patterns"]["fill"] = gen_fill(genre)
-  # Real, measured problem: drum-voice synthesis is interpreted (~4,200
-  # samples/sec, see beat-render's own comment), and every DISTINCT
-  # pattern name gets synthesized once regardless of content - an "outro"
-  # pattern built identically to "intro" (gen_intro(genre) called again)
-  # cost a full extra unique-pattern render for zero audible difference.
-  # Reusing "intro" as the closing bar too cuts one of four unique
-  # renders on a live production smoke test - real time saved, not a
-  # theoretical one (see PLAN2.md's related "generate a beat" hardware
-  # note for that box's actual measured throughput).
-  let spec = "intro*2,main*" + str(bars) + ",fill,main*2,intro"
-  p["arrangement"] = parse_arrangement(spec, p["patterns"])
+
+  # PLAN4.md Phase I: --target-seconds= opts into a real, length-scaled
+  # verse/chorus/bridge song structure instead of the short fixed
+  # template below - a genuinely different arrangement, not the same one
+  # just repeated longer, which is why chorus/bridge patterns only get
+  # built (and only cost the extra render/interpret time) when asked for.
+  let target_seconds = argmod.flag(a, "target-seconds", nil)
+  if target_seconds != nil {
+    let bar_dur = 60.0 / bpm / 4.0 * STEPS
+    let target_bars = int(float(target_seconds) / bar_dur)
+    p["patterns"]["chorus"] = gen_chorus(genre)
+    p["patterns"]["bridge"] = gen_bridge(genre)
+    # build_full_arrangement already returns a fully-expanded list of
+    # pattern names (not a compact spec string) - parse_arrangement is
+    # for the spec-string syntax "main*8,fill", so this validates each
+    # name directly instead of round-tripping through spec formatting.
+    let expanded = build_full_arrangement(target_bars)
+    for name in expanded { if not p["patterns"].has(name) { fail("arrangement references unknown pattern '" + name + "'") } }
+    p["arrangement"] = expanded
+  } else {
+    # Real, measured problem: drum-voice synthesis is interpreted (~4,200
+    # samples/sec, see beat-render's own comment), and every DISTINCT
+    # pattern name gets synthesized once regardless of content - an
+    # "outro" pattern built identically to "intro" (gen_intro(genre)
+    # called again) cost a full extra unique-pattern render for zero
+    # audible difference. Reusing "intro" as the closing bar too cuts one
+    # of four unique renders on a live production smoke test - real time
+    # saved, not a theoretical one (see PLAN2.md's related "generate a
+    # beat" hardware note for that box's actual measured throughput).
+    let spec = "intro*2,main*" + str(bars) + ",fill,main*2,intro"
+    p["arrangement"] = parse_arrangement(spec, p["patterns"])
+  }
 
   # Melodic layer (PLAN3.md Phase E): one chord per arrangement bar, same
   # indexing as p["arrangement"] itself, so melody-render can zip them
@@ -1721,7 +1814,7 @@ cli.command(app, "step", "program the 'main' pattern: step VOICE STEP on|off", f
 cli.command(app, "pattern-add", "create a new named pattern: pattern-add NAME", fn(a) { cmd_pattern_add(a) })
 cli.command(app, "pattern-step", "program a named pattern: pattern-step NAME VOICE STEP on|off", fn(a) { cmd_pattern_step(a) })
 cli.command(app, "arrange", "chain patterns into a song: arrange main*8,fill,main*8", fn(a) { cmd_arrange(a) })
-cli.command(app, "generate", "auto-generate a genre beat + chord progression (free): generate GENRE [--bpm=] [--bars=] [--seed=] [--key=SEMITONES-FROM-A4] [--no-melody] - choices: " + str(GENRES), fn(a) { cmd_generate(a) })
+cli.command(app, "generate", "auto-generate a genre beat + chord progression (free): generate GENRE [--bpm=] [--bars=] [--seed=] [--key=SEMITONES-FROM-A4] [--no-melody] [--target-seconds=N up to 300 for a real verse/chorus/bridge full-song structure] - choices: " + str(GENRES), fn(a) { cmd_generate(a) })
 cli.command(app, "beat-render", "synthesize the arrangement (or just 'main') to a track (free)", fn(a) { cmd_beat_render(a) })
 cli.command(app, "melody-render", "synthesize the bass+chords arrangement to its own track (free): needs 'generate' run first", fn(a) { cmd_melody_render(a) })
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })

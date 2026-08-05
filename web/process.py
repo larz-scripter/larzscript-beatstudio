@@ -41,7 +41,7 @@ LOCK_PATH = "/opt/beatstudio/.process.lock"
 # always-available fallback rather than a hard failure. bars=4 matches
 # the arrangement length ("intro*2,main*4,fill,main*2,outro") the
 # original hand-authored demo beat used.
-DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1, "melody": True}
+DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1, "melody": True, "targetSeconds": 0}
 
 DEFAULT_STRIP = {"eqLow": 0.0, "eqMid": 0.0, "eqHigh": 0.0, "compThresh": 0.0, "compRatio": 3.0,
                   "duckFrom": None, "delayMs": 0.0, "delayFeedback": 0.3, "delayMix": 0.0}
@@ -99,17 +99,23 @@ def load_beat(d):
             b = json.load(f)
         return {"genre": b.get("genre", DEFAULT_BEAT["genre"]), "bpm": b.get("bpm", DEFAULT_BEAT["bpm"]),
                 "bars": b.get("bars", DEFAULT_BEAT["bars"]), "seed": b.get("seed", DEFAULT_BEAT["seed"]),
-                "melody": b.get("melody", DEFAULT_BEAT["melody"])}
+                "melody": b.get("melody", DEFAULT_BEAT["melody"]),
+                "targetSeconds": b.get("targetSeconds", DEFAULT_BEAT["targetSeconds"])}
     except (json.JSONDecodeError, OSError):
         return DEFAULT_BEAT
 
 
-def generate_beat(project, beat, timeout=120):
+def generate_beat(project, beat, timeout=180):
     cmd = BEATSTUDIO + ["generate", beat["genre"], "--bpm=" + str(beat["bpm"]),
                          "--bars=" + str(beat["bars"]), "--seed=" + str(beat["seed"]),
                          "--file=" + project]
     if not beat.get("melody", True):
         cmd.append("--no-melody")
+    # PLAN4.md Phase I: a real verse/chorus/bridge structure scaled to
+    # this many seconds instead of the short fixed template - 0 (default)
+    # keeps the existing short behavior exactly as before.
+    if beat.get("targetSeconds", 0) > 0:
+        cmd.append("--target-seconds=" + str(beat["targetSeconds"]))
     return run(cmd, timeout=timeout)
 
 
