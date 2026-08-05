@@ -208,6 +208,27 @@ def read_track_gain(project, name):
     return None
 
 
+def read_track_compressor(project, name):
+    """Reads back a track's auto-set comp_thresh_db/comp_ratio, if
+    track-import --auto-gain engaged real vocal leveling on a recording
+    with an unusually large peak-to-RMS gap (see beatstudio.lz's own
+    comment on that). apply_strip below always sends --clear before
+    reapplying a track's strip params from `params` (a track with no
+    manual EQ/compression configured produces the exact same
+    beatstudio.lz call every time) - without reading this back first,
+    that --clear would silently wipe the auto-leveling compressor the
+    moment apply_mix runs, right after track-import sets it."""
+    try:
+        with open(project) as f:
+            p = json.load(f)
+        for t in p.get("tracks", []):
+            if t["name"] == name and t.get("comp_thresh_db") is not None:
+                return t["comp_thresh_db"], t.get("comp_ratio", 3.0)
+    except (json.JSONDecodeError, OSError, KeyError):
+        pass
+    return None
+
+
 def project_is_budgeted(project):
     """True only for a project that went through the REAL `init
     --budget=1000` process_uploaded runs - never true for the FREE
@@ -637,6 +658,10 @@ def process_uploaded(session_id, d):
     vocal_gain = read_track_gain(project, "vocal")
     if vocal_gain is not None:
         params["tracks"]["vocal"]["gain"] = vocal_gain
+    vocal_comp = read_track_compressor(project, "vocal")
+    if vocal_comp is not None:
+        params["tracks"]["vocal"]["strip"]["compThresh"] = vocal_comp[0]
+        params["tracks"]["vocal"]["strip"]["compRatio"] = vocal_comp[1]
     write_status(d, "processing", stage="Setting mix levels...")
     if apply_mix(project, params, "initial mix", d) is not None:
         return

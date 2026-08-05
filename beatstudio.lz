@@ -723,7 +723,21 @@ fn build_full_arrangement(target_bars) {
   let reserved = 2 + 2 + 1 + 4 + 2
   let remaining = target_bars - reserved
   if remaining < len(cycle) { remaining = len(cycle) }
-  let n_cycles = remaining // len(cycle)
+  # Was `//` (floor) - a real production case caught this: a 60s request
+  # at 105bpm floored 15 remaining bars down to just 1 cycle (8 bars),
+  # landing the WHOLE arrangement at 43.4s - 28% short of what was asked
+  # for. Since a recorded vocal is usually LONGER than the beat it was
+  # requested against (this file's own track_read loops any track short
+  # of the mix's overall length - see its own comment), that 17s gap
+  # meant the beat arrangement finished and restarted FROM THE INTRO
+  # partway through the same take, audibly "the same thing again" - not
+  # a lack of pattern variety, a real arithmetic undershoot. Rounding to
+  # the NEAREST whole cycle instead of flooring cuts that same case's
+  # error to +3% (61.7s) - verified across a spread of bpm/target
+  # combinations to be a strict improvement (round is never farther from
+  # the target than floor was) with no regressions where floor already
+  # happened to round down cleanly.
+  let n_cycles = round(float(remaining) / len(cycle))
   if n_cycles < 1 { n_cycles = 1 }
   let out = ["intro", "intro"]
   let c = 0
@@ -1176,6 +1190,28 @@ fn measure_peak(track) {
   return peak
 }
 
+# Same chunked discipline as measure_peak above - the building block for
+# recognizing a recording whose PEAK and BODY are wildly different levels
+# (a large peak-to-RMS gap, "crest factor") - see --auto-gain's own
+# comment below for why peak alone isn't enough to gain-stage that kind
+# of take well.
+fn measure_rms(track) {
+  let total = track["total_samples"]
+  let sum_sq = 0.0
+  let n = 0
+  let pos = 0
+  while pos < total {
+    let this_len = total - pos
+    if this_len > CHUNK_SAMPLES { this_len = CHUNK_SAMPLES }
+    let buf = track_read(track, pos, this_len)
+    sum_sq = sum_sq + _native_sum_sq(buf)
+    n = n + this_len
+    pos = pos + this_len
+  }
+  if n == 0 { return 0.0 }
+  return sqrt(sum_sq / float(n))
+}
+
 fn cmd_track_import(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   if len(a["positional"]) < 1 { fail("usage: track-import WAVPATH --name=NAME [--auto-gain]") }
@@ -1206,24 +1242,77 @@ fn cmd_track_import(a) {
     if peak > 0.0 {
       let peak_db = dsp.linear_to_db(peak)
       let target_db = -12.0
-      let computed = target_db - peak_db
+      # Real follow-up to the incident above: even after that fix, the
+      # SAME real user's take still sat ~20dB under the beat once
+      # mixed - because gain-staging off PEAK alone can't tell a
+      # recording with genuinely loud, sustained content from one that's
+      # mostly near-silence with a few rare louder moments (this take
+      # measured RMS a full 23dB below its own peak - most of it is
+      # quieter than the "peak" gain-staging targets). A real vocal
+      # leveling technique fixes this: compress the rare peaks down
+      # toward the body FIRST, then gain the whole thing - the same
+      # makeup gain that only reaches the peak ceiling on the raw signal
+      # reaches much further once the peaks aren't eating the headroom
+      # alone, and it raises the QUIET body right along with them (the
+      # compressor only touches what's ABOVE its threshold, so the body
+      # passes through unchanged, then gets the SAME uniform makeup gain
+      # as everything else).
+      let rms = measure_rms(track)
+      let use_compression = false
+      let comp_thresh_db = 0.0
+      let comp_ratio = 4.0
+      let effective_peak_db = peak_db
+      if rms > 0.0 {
+        let rms_db = dsp.linear_to_db(rms)
+        let crest_db = peak_db - rms_db
+        # 15dB is a real, generous margin above ordinary vocal dynamics
+        # (natural speech/singing typically runs ~8-14dB peak-to-RMS) -
+        # only engages for a recording whose peaks are genuinely rare
+        # outliers against a much quieter body, leaving normal takes
+        # exactly as before (untouched, matching the already-verified
+        # behavior for the common case).
+        if crest_db > 15.0 {
+          use_compression = true
+          comp_thresh_db = rms_db + 6.0
+          # Static-ratio ESTIMATE of what the real streaming compressor
+          # (8ms attack/120ms release, same as this file's other
+          # per-track compressors) will bring the peak down to - not
+          # exact (a fast attack can still let brief transients partly
+          # through), but this only sets a STARTING gain; the actual
+          # render always runs through a real limiter downstream (preview
+          # or master) regardless of how close this estimate lands.
+          effective_peak_db = comp_thresh_db + (peak_db - comp_thresh_db) / comp_ratio
+        }
+      }
+      let computed = target_db - effective_peak_db
       # Wider than the UI's own exposed mixer-slider range on purpose -
       # this is the computed STARTING point (a real rescue for a
       # pathologically quiet mic), not a value a visitor is expected to
       # dial in by hand; the UI's slider range is a separate, smaller
       # fine-tuning control layered on top of this.
       if computed < -24.0 { computed = -24.0 }
-      # Was 40.0 - a real production case (peak -70.3dBFS) needed 58.3dB to
-      # reach target and measurably proved the point: at the old 40dB cap,
-      # the vocal sat ~38dB under the beat in the actual mix (A/B diff
-      # measured -56.2dBFS vs a -18.2dBFS mix, i.e. functionally silent);
-      # letting it reach the real computed value landed ~20dB under the
-      # beat instead (diff -37.9dBFS), present and audible, with no
-      # clipping (limiter still held peak at -1dBFS). 60 gives a little
-      # headroom beyond that one real case without being unbounded.
-      if computed > 60.0 { computed = 60.0 }
+      # Was 40.0, then 60.0 - a real production case (peak -70.3dBFS)
+      # needed 58.3dB to reach target and measurably proved the point: at
+      # the old 40dB cap, the vocal sat ~38dB under the beat in the
+      # actual mix (A/B diff measured -56.2dBFS vs a -18.2dBFS mix, i.e.
+      # functionally silent); letting it reach the real computed value
+      # landed ~20dB under the beat instead (diff -37.9dBFS), present and
+      # audible, with no clipping (limiter still held peak at -1dBFS).
+      # 60 stays the ceiling for the UNCOMPRESSED path (the common case,
+      # already verified live). The COMPRESSED path gets real extra
+      # headroom (80) instead - the whole point of compressing first is
+      # that the same absolute gain is now SAFE to push further, because
+      # the peaks that would have made a bigger number risky are already
+      # tamed before this gain ever applies.
+      let clamp_max = use_compression ? 80.0 : 60.0
+      if computed > clamp_max { computed = clamp_max }
       track["gain_db"] = computed
-      gain_note = ", auto-gain: " + str(round(computed, 1)) + "dB (measured peak " + str(round(peak_db, 1)) + "dBFS)"
+      if use_compression {
+        track["comp_thresh_db"] = comp_thresh_db
+        track["comp_ratio"] = comp_ratio
+      }
+      gain_note = ", auto-gain: " + str(round(computed, 1)) + "dB (measured peak " + str(round(peak_db, 1)) + "dBFS)" +
+                  (use_compression ? " + auto-leveling (compressor thresh " + str(round(comp_thresh_db, 1)) + "dB, ratio " + str(comp_ratio) + ":1)" : "")
     }
   }
 
