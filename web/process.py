@@ -5,19 +5,31 @@ Job types, distinguished by session status:
                            + preview just the beat (beat.json's genre/bpm/
                            bars), so a visitor can hear/regenerate it BEFORE
                            committing to record - PLAN2.md Phase C.
-  "uploaded"             -> full pipeline: assemble takes (if a recording-
+  "uploaded"             -> free pipeline: assemble takes (if a recording-
                            workspace manifest.json is present) or decode the
-                           legacy single upload -> init project -> generate
-                           the beat -> track-import vocal -> voice-edit
-                           (fade/autotrim/gate/de-ess, if requested) -> mix
-                           (default levels) -> preview -> master (PAID,
-                           first time only).
-  "rerender_requested"  -> lighter job: mix (new gain/pan/mute) -> preview ->
-                           remaster (FREE - beatstudio.lz only charges the
-                           wallet once per project, see beatstudio.lz's
-                           `master`/`remaster` commands) with new EQ/
-                           compressor/loudness settings. Reuses the beat/
-                           vocal tracks already rendered by the first pass -
+                           legacy single upload -> (first time only) init
+                           project + generate the beat -> track-import vocal
+                           -> voice-edit (fade/autotrim/gate/de-ess, if
+                           requested) -> autotune/double/harmonize (if
+                           requested) -> mix (default levels) -> preview.
+                           Stops at "preview_ready" - NO master, nothing
+                           charged yet. A visitor lands back here from
+                           "Use this arrangement" every time, including a
+                           RETAKE (re-recording/re-trimming after already
+                           hearing a preview): the project already has its
+                           beat/melody tracks rendered, so a retake skips
+                           straight to track-import onward - see the
+                           project.json existence check below - PLAN6.md
+                           Phase Q.
+  "finalize_requested"  -> triggered by a visitor who liked what they heard
+                           at "preview_ready" and wants to commit: mix ->
+                           preview -> master (PAID the first time only,
+                           FREE after that per beatstudio.lz's own
+                           master/remaster split) -> publish. PLAN6.md Phase Q.
+  "rerender_requested"  -> lighter job, for AFTER a master already exists:
+                           mix (new gain/pan/mute) -> preview -> remaster
+                           (FREE) with new EQ/compressor/loudness settings.
+                           Reuses the beat/vocal tracks already rendered -
                            no re-decode, no re-synthesis.
 All drop results where Apache serves them as static files.
 """
@@ -64,7 +76,43 @@ DEFAULT_PARAMS = {
 # this list must tolerate a missing track rather than assume it exists.
 TRACK_NAMES = ("beat", "vocal", "melody")
 
+# Layered vocal tracks that only exist when the matching fx flag is on
+# (see beatstudio.lz's `double`/`harmonize` - each writes/upserts a FIXED
+# track name, so re-running with the flag on again just replaces it).
+# The real hazard this maps for: a RETAKE (PLAN6.md Phase Q) can turn a
+# flag OFF that was ON for a prior take - "vocal_double" would otherwise
+# keep sitting in project.json with the OLD take's audio and mix_chunk
+# includes every non-muted track regardless of what apply_mix touches, so
+# it would keep playing a stale layer nobody asked for anymore. Muted
+# explicitly below rather than left alone whenever the flag is off but
+# the track still exists from an earlier take.
+EXTRA_VOCAL_TRACKS = {"vocal_double": "double", "vocal_harmony": "harmonize"}
+
 MASTER_PRICE = "2"
+
+
+def write_params(d, params):
+    tmp = os.path.join(d, "params.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(params, f)
+    os.replace(tmp, os.path.join(d, "params.json"))
+
+
+def mute_stale_extra_tracks(project, fx, existing, log_prefix, d):
+    """See EXTRA_VOCAL_TRACKS above - only matters on a retake where a
+    layer that WAS requested no longer is. A no-op (0 calls) on a normal
+    first-time upload, since a track named "vocal_double"/"vocal_harmony"
+    can only exist here if a PRIOR pass on this same project created it."""
+    for name, flag in EXTRA_VOCAL_TRACKS.items():
+        if name not in existing:
+            continue
+        if fx and fx.get(flag):
+            continue
+        p = run(BEATSTUDIO + ["mix", name, "--mute=true", "--file=" + project])
+        if p.returncode != 0:
+            write_status(d, "error", message=log_prefix + ": couldn't mute stale '" + name + "' from an earlier take", detail=p.stdout[-800:])
+            return p
+    return None
 
 
 def write_status(d, status, **extra):
@@ -305,6 +353,25 @@ def render_preview_and_master(project, params, d, is_first_master):
     return True
 
 
+def publish_preview(project, d, session_id):
+    """PLAN6.md Phase Q - the free, pre-master checkpoint: publishes the
+    mix-only preview (no EQ/compressor/limiter, no charge) so a visitor
+    can hear the vocal WITH the beat before deciding whether to retake or
+    commit to mastering. A distinct filename from before.wav/after.wav
+    (publish_results below) - the two never coexist in meaning (this one
+    is superseded the moment a real master exists) but keeping them
+    separate avoids a stale post-master "before" being momentarily
+    confused with the un-mastered take a visitor is currently reviewing
+    on a retake."""
+    out_dir = os.path.join(RESULTS_DIR, session_id)
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copyfile(os.path.join(d, "preview.wav"), os.path.join(out_dir, "preview_take.wav"))
+    os.chmod(os.path.join(out_dir, "preview_take.wav"), 0o644)
+    track_names = project_track_names(project)
+    write_status(d, "preview_ready", preview_url="/beatstudio/results/" + session_id + "/preview_take.wav",
+                 melody="melody" in track_names)
+
+
 def publish_results(project, d, session_id):
     out_dir = os.path.join(RESULTS_DIR, session_id)
     os.makedirs(out_dir, exist_ok=True)
@@ -434,29 +501,38 @@ def process_uploaded(session_id, d):
 
     beat = load_beat(d)
     project = os.path.join(d, "project.json")
-    p = run(BEATSTUDIO + ["init", "--budget=1000", "--file=" + project])
-    if p.returncode != 0:
-        write_status(d, "error", message="init failed", detail=p.stdout[-800:])
-        return
-
-    write_status(d, "processing", stage="Generating your beat...")
-    p = generate_beat(project, beat)
-    if p.returncode != 0:
-        write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
-        return
-
-    write_status(d, "processing", stage="Rendering the beat...")
-    p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
-    if p.returncode != 0:
-        write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
-        return
-
-    if beat.get("melody", True):
-        write_status(d, "processing", stage="Rendering bass & chords...")
-        p = melody_render(project)
+    # PLAN6.md Phase Q: a project.json that ALREADY exists means this is a
+    # RETAKE landing back here after a "preview_ready" checkpoint (see
+    # process_finalize/publish_preview below) - the beat/melody are
+    # already generated and rendered, so skip straight to re-importing the
+    # vocal. Only a genuinely first-time upload runs init/generate/render.
+    is_retake = os.path.exists(project)
+    if not is_retake:
+        p = run(BEATSTUDIO + ["init", "--budget=1000", "--file=" + project])
         if p.returncode != 0:
-            write_status(d, "error", message="melody render failed", detail=p.stdout[-800:])
+            write_status(d, "error", message="init failed", detail=p.stdout[-800:])
             return
+
+        write_status(d, "processing", stage="Generating your beat...")
+        p = generate_beat(project, beat)
+        if p.returncode != 0:
+            write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
+            return
+
+        write_status(d, "processing", stage="Rendering the beat...")
+        p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
+        if p.returncode != 0:
+            write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
+            return
+
+        if beat.get("melody", True):
+            write_status(d, "processing", stage="Rendering bass & chords...")
+            p = melody_render(project)
+            if p.returncode != 0:
+                write_status(d, "error", message="melody render failed", detail=p.stdout[-800:])
+                return
+    else:
+        write_status(d, "processing", stage="Preparing your retake...")
 
     write_status(d, "processing", stage="Adding your recording...")
     # --auto-gain: real gain-staging on import, not a cosmetic default -
@@ -522,6 +598,11 @@ def process_uploaded(session_id, d):
             write_status(d, "error", message="couldn't create the harmony - does this project have a chord progression? (drums-only beats can't harmonize)", detail=p.stdout[-800:])
             return
 
+    # See EXTRA_VOCAL_TRACKS's own comment - only ever mutes something on a
+    # retake that turned a previously-on double/harmonize flag off.
+    if mute_stale_extra_tracks(project, fx, project_track_names(project), "cleanup", d) is not None:
+        return
+
     # A real deepcopy, not a reference - DEFAULT_PARAMS is a module-level
     # dict reused across every session; mutating it directly would leak
     # one session's auto-gain value into every other session's defaults.
@@ -532,7 +613,37 @@ def process_uploaded(session_id, d):
     write_status(d, "processing", stage="Setting mix levels...")
     if apply_mix(project, params, "initial mix", d) is not None:
         return
-    if not render_preview_and_master(project, params, d, is_first_master=True):
+    # PLAN6.md Phase Q: stop at the free preview checkpoint - no master,
+    # nothing charged. Persist the params used so process_finalize (once
+    # a visitor actually commits) mixes with the exact same levels the
+    # preview they approved was built from, rather than silently
+    # reconstructing DEFAULT_PARAMS and losing the auto-gain value.
+    write_params(d, params)
+    write_status(d, "processing", stage="Mixing your preview...")
+    p = run(BEATSTUDIO + ["preview", "--file=" + project], timeout=300)
+    if p.returncode != 0:
+        write_status(d, "error", message="preview mix failed", detail=p.stdout[-800:])
+        return
+    publish_preview(project, d, session_id)
+
+
+def process_finalize(session_id, d):
+    """PLAN6.md Phase Q: triggered once a visitor has heard the free
+    preview (and retaken/adjusted as many times as they wanted) and hits
+    "Mix & master" - the ONLY step that ever charges the wallet, and even
+    then only the first time per project (beatstudio.lz's own
+    master/remaster split, unchanged)."""
+    project = os.path.join(d, "project.json")
+    if not os.path.exists(project):
+        write_status(d, "error", message="no project to master - record something first")
+        return
+    write_status(d, "processing", stage="Setting mix levels...")
+    params = load_params(d)
+    if apply_mix(project, params, "finalize", d) is not None:
+        return
+    with open(project) as f:
+        is_first_master = len(json.load(f).get("masters", [])) == 0
+    if not render_preview_and_master(project, params, d, is_first_master=is_first_master):
         return
     write_status(d, "processing", stage="Finishing up...")
     publish_results(project, d, session_id)
@@ -567,11 +678,13 @@ def main():
         except Exception:
             continue
         status = st.get("status")
-        if status not in ("uploaded", "rerender_requested", "beat_requested"):
+        if status not in ("uploaded", "finalize_requested", "rerender_requested", "beat_requested"):
             continue
         try:
             if status == "uploaded":
                 process_uploaded(session_id, d)
+            elif status == "finalize_requested":
+                process_finalize(session_id, d)
             elif status == "rerender_requested":
                 process_rerender(session_id, d)
             else:

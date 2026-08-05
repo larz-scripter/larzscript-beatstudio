@@ -336,6 +336,10 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
           </div>
           <div class="meter" id="result-meter"><i></i></div>
         </div>
+        <div class="mixer-actions" id="preview-actions" style="display:none">
+          <button class="btn-ghost" id="retake-btn">&#128257; Retake or add more</button>
+          <button class="btn-primary" id="finalize-btn">&#10003; Sounds good — Mix &amp; master ($2)</button>
+        </div>
         <div id="stems-box" style="display:none; margin-top:14px">
           <div class="section-label" style="margin:0 0 8px">Download stems</div>
           <div id="stems-list" style="display:flex; flex-wrap:wrap; gap:8px"></div>
@@ -1013,12 +1017,40 @@ document.getElementById("use-arrangement-btn").addEventListener("click", async (
     });
     const data2 = await res2.json();
     if (!res2.ok) throw new Error(data2.error || "assemble failed");
-    setStatus("Uploaded. Mixing and mastering your track now — this usually takes under a couple of minutes...");
+    setStatus("Uploaded. Mixing your preview — this usually takes under a minute...");
+    document.getElementById("preview-actions").style.display = "none";
     pollStatus(false);
   } catch (e) {
     recProgress.classList.remove("on");
     setStatus("Upload failed: " + e.message, "err");
     document.getElementById("use-arrangement-btn").disabled = false;
+  }
+});
+
+// PLAN6.md Phase Q - the free preview checkpoint's two exits: go back and
+// re-record/re-trim/re-edit-fx (takes[] is untouched, so everything a
+// visitor already captured is still right there), or commit to the paid
+// mastering step.
+document.getElementById("retake-btn").addEventListener("click", () => {
+  document.getElementById("preview-actions").style.display = "none";
+  document.getElementById("rec-btn").scrollIntoView({ behavior: "smooth", block: "center" });
+  setStatus("Record a new take, re-trim an existing one, or change the effects above — then click “Use this arrangement” again.", "ok");
+});
+document.getElementById("finalize-btn").addEventListener("click", async () => {
+  document.getElementById("finalize-btn").disabled = true;
+  document.getElementById("retake-btn").disabled = true;
+  setStatus("Mixing and mastering your track now — this usually takes under a couple of minutes...");
+  try {
+    const res = await fetch(API + "/finalize?session=" + sessionId, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "couldn't start mastering");
+    document.getElementById("preview-actions").style.display = "none";
+    recProgress.classList.add("on");
+    pollStatus(false);
+  } catch (e) {
+    setStatus("Couldn't start mastering: " + e.message, "err");
+    document.getElementById("finalize-btn").disabled = false;
+    document.getElementById("retake-btn").disabled = false;
   }
 });
 
@@ -1059,15 +1091,41 @@ function pollStatus(isRerender){
       // brief window before the first stage lands.
       const msg = data.stage || (isRerender
         ? "Re-rendering with your new settings — usually under a minute..."
-        : "Mixing and mastering your track now — this usually takes under a couple of minutes...");
+        : "Mixing your preview — this usually takes under a minute...");
       setStatus(msg);
       if (isRerender) setMixerStatus(msg);
+    } else if (data.status === "preview_ready") {
+      // PLAN6.md Phase Q - the free checkpoint: nothing charged yet.
+      // Reuses the "result" deck but as a single clip (no A/B - there's
+      // no mastered version yet), with Retake/Finalize in place of the
+      // mixer+stems the "done" branch below shows.
+      clearInterval(iv);
+      recProgress.classList.remove("on");
+      setStatus("Preview ready — listen below, then retake or finalize.", "ok");
+      resultBox.classList.add("on");
+      mixerBox.classList.remove("on");
+      document.querySelector("#deck-result .toggle-row").style.display = "none";
+      document.getElementById("stems-box").style.display = "none";
+      const previewData = {
+        before: { url: data.preview_url + "?v=" + Date.now(), peak: -3.0 },
+        after:  { url: data.preview_url + "?v=" + Date.now(), peak: -3.0 },
+      };
+      if (!resultDeck) { resultDeck = makeDeck("result", previewData); attachPlaybackMeter(resultDeck.audio, "#result-meter"); }
+      else resultDeck.setData(previewData);
+      const previewActions = document.getElementById("preview-actions");
+      previewActions.style.display = "";
+      document.getElementById("finalize-btn").disabled = false;
+      document.getElementById("retake-btn").disabled = false;
+      document.getElementById("use-arrangement-btn").disabled = false;
+      resultBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
     } else if (data.status === "done") {
       clearInterval(iv);
       recProgress.classList.remove("on");
       setStatus("Done — your mastered track is ready below.", "ok");
       resultBox.classList.add("on");
       mixerBox.classList.add("on");
+      document.querySelector("#deck-result .toggle-row").style.display = "";
+      document.getElementById("preview-actions").style.display = "none";
       melodyPanel.style.display = data.melody ? "" : "none";
       const resultData = {
         before: { url: data.before_url + "?v=" + Date.now(), peak: -3.0 },
@@ -1087,7 +1145,18 @@ function pollStatus(isRerender){
       recProgress.classList.remove("on");
       const msg = "Something went wrong: " + (data.message || "unknown error") + " — try again.";
       setStatus(msg, "err");
-      if (isRerender) { setMixerStatus(msg, "err"); setApplyEnabled(true); }
+      if (isRerender) {
+        setMixerStatus(msg, "err");
+        setApplyEnabled(true);
+      } else {
+        // A real gap this closes: without this, a failure reported here
+        // (as opposed to a synchronous fetch() throw the click handler's
+        // own try/catch already covers) left "Use this arrangement"
+        // disabled with no way to retry short of reloading the page.
+        document.getElementById("use-arrangement-btn").disabled = false;
+        document.getElementById("finalize-btn").disabled = false;
+        document.getElementById("retake-btn").disabled = false;
+      }
     }
   }, 3000);
 }

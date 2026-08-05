@@ -14,9 +14,20 @@ Recording workspace (PLAN2.md Phase B/C) endpoints:
                                preview render, before anything is recorded.
   POST /api/take?session=X&index=N   one raw take clip (record in bits).
   POST /api/assemble?session=X       {takes:[...], fx:{...}} -> kicks off
-                               the same full pipeline /api/upload used to,
-                               now via ffmpeg-assembling the takes (with
-                               trim/gaps) into one vocal file first.
+                               the free mix-only pipeline /api/upload used
+                               to, now via ffmpeg-assembling the takes
+                               (with trim/gaps) into one vocal file first.
+                               Lands on "preview_ready" (PLAN6.md Phase Q),
+                               NOT "done" - nothing is charged here. Also
+                               how a RETAKE re-enters: the same session id,
+                               posted again after re-recording/re-trimming
+                               takes, reuses the project's already-rendered
+                               beat/melody (see process.py's own retake
+                               detection).
+  POST /api/finalize?session=X       only valid once a session is at
+                               "preview_ready" - triggers the paid (first
+                               time only) mix+master step and lands on
+                               "done". PLAN6.md Phase Q.
 """
 import json
 import os
@@ -328,6 +339,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_beat()
         if self.path.startswith("/api/params"):
             return self._handle_params()
+        if self.path.startswith("/api/finalize"):
+            return self._handle_finalize()
         self._json(404, {"error": "not found"})
 
     def _read_body_to_file(self, dst_path, max_bytes):
@@ -511,6 +524,26 @@ class Handler(BaseHTTPRequestHandler):
 
         write_status(session_id, "rerender_requested")
         self._json(200, {"status": "rerender_requested"})
+
+    def _handle_finalize(self):
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        qparams = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        session_id = qparams.get("session", "")
+        if not SESSION_RE.match(session_id):
+            return self._json(400, {"error": "bad session id"})
+
+        # PLAN6.md Phase Q: the free preview checkpoint is the ONLY state
+        # finalize is valid from - there's nothing to master before a
+        # preview exists, and re-posting mid-render (or after the session
+        # already moved on) would race process.py's own terminal write,
+        # same reasoning _handle_assemble/_handle_beat's "processing" guard
+        # already established above.
+        status = current_status(session_id)
+        if status != "preview_ready":
+            return self._json(409, {"error": "nothing ready to master yet - listen to your preview first"})
+
+        write_status(session_id, "finalize_requested")
+        self._json(200, {"status": "finalize_requested"})
 
     def log_message(self, fmt, *args):
         pass
