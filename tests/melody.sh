@@ -1,0 +1,12 @@
+#!/bin/sh
+F="$1"
+D="$(dirname "$F")"
+$BEATSTUDIO init --budget=20 --bpm=140 --file="$F"
+$BEATSTUDIO generate trap --bars=2 --seed=7 --file="$F"
+$BEATSTUDIO beat-render --file="$F"
+$BEATSTUDIO melody-render --file="$F"
+$BEATSTUDIO mix beat --gain=0 --file="$F"
+$BEATSTUDIO mix melody --gain=-4 --file="$F"
+$BEATSTUDIO preview --file="$F"
+$BEATSTUDIO master --price=1 --file="$F"
+$BEATSTUDIO report --file="$F"

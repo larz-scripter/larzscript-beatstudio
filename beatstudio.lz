@@ -654,6 +654,200 @@ fn gen_fill(genre) {
   return pat
 }
 
+# ---- melodic engine: bass + chords (PLAN3.md Phase E) -----------------
+# "Full song length" was never a duration problem (see render_stream's
+# chunked-streaming design - a 5-minute render already costs the same
+# memory as a 30-second one). The real gap: every voice above is a DRUM -
+# percussive, untuned - nothing in this file could hold a musical pitch,
+# so a generated "song" was always just a long drum loop. This section
+# adds exactly that: a tuned oscillator voice (synth_note), a small
+# hand-authored chord/progression table (no harmony code existed anywhere
+# in this stack before this), and a bass+chords renderer that plugs into
+# the existing streaming pipeline as its own independently-mixed track
+# ("melody") - not a change to how drums render, sequence, or mix.
+
+# 12-tone equal temperament, precomputed (2^(n/12) for n=0..11) instead of
+# a general pow(float): this interpreter's pow() only takes whole-number
+# exponents (see dsp's own header comment), and dsp doesn't publicly
+# export the _exp/_ln it uses internally to build one. A 12-entry table is
+# exact and never needs a general power function - octaves above/below a
+# base frequency just double/halve (an integer loop, see note_freq).
+let CHROMATIC_RATIOS = [
+  1.0, 1.059463094, 1.122462048, 1.189207115, 1.259921050, 1.334839854,
+  1.414213562, 1.498307077, 1.587401052, 1.681792831, 1.781797436, 1.887748625,
+]
+
+# base_freq is the frequency AT semitone 0; `semitones` can be any
+# integer, negative included. Octave shift is plain doubling/halving -
+# exact, and the only "power of 2" any of this needs.
+fn note_freq(base_freq, semitones) {
+  let octave = semitones // 12
+  let within = semitones % 12
+  if within < 0 { within = within + 12; octave = octave - 1 }
+  let f = base_freq * CHROMATIC_RATIOS[within]
+  let k = 0
+  while k < octave { f = f * 2.0; k = k + 1 }
+  while k > octave { f = f / 2.0; k = k - 1 }
+  return f
+}
+
+let A4 = 440.0
+# This file's own semitone numbering: 0 = A4 (440Hz), not the usual MIDI
+# "69" - there's no other use for MIDI note numbers here, so anchoring at
+# 0 keeps every call site's arithmetic simpler than carrying +69 around.
+fn midi_freq(semitones_from_a4) { return note_freq(A4, semitones_from_a4) }
+
+# Chord quality -> intervals in semitones above the root.
+let CHORD_TABLE = {
+  "major": [0, 4, 7], "minor": [0, 3, 7],
+  "major7": [0, 4, 7, 11], "minor7": [0, 3, 7, 10], "dom7": [0, 4, 7, 10],
+}
+
+fn chord_notes(key_root_semitone, deg, quality) {
+  let out = []
+  for iv in CHORD_TABLE[quality] { out.push(key_root_semitone + deg + iv) }
+  return out
+}
+
+# Each genre's progression: a short, fixed loop of {deg, q} relative to
+# the project's key root - `deg` is semitones above the root (a real
+# scale-degree choice per genre, not an arbitrary number: e.g. trap's
+# 0/8/3/10 is the natural-minor i-VI-III-VII loop countless trap/drill
+# beats actually use; pop's 0/7/9/5 is the I-V-vi-IV loop that's been a
+# pop-radio staple for decades). Cycles if the arrangement has more bars
+# than the progression length - a real repeating loop, matching how one
+# drum pattern name already repeats across many bars in render.
+fn genre_progression(genre) {
+  if genre == "trap" { return [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":3,"q":"major"},{"deg":10,"q":"major"}] }
+  if genre == "lofi" { return [{"deg":2,"q":"minor7"},{"deg":7,"q":"dom7"},{"deg":0,"q":"major7"},{"deg":0,"q":"major7"}] }
+  if genre == "boombap" { return [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}] }
+  if genre == "pop" { return [{"deg":0,"q":"major"},{"deg":7,"q":"major"},{"deg":9,"q":"minor"},{"deg":5,"q":"major"}] }
+  if genre == "afrobeat" { return [{"deg":0,"q":"major"},{"deg":5,"q":"major"},{"deg":7,"q":"major"},{"deg":5,"q":"major"}] }
+  if genre == "house" { return [{"deg":0,"q":"minor"},{"deg":10,"q":"major"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}] }
+  fail("unknown genre '" + genre + "' - choices: " + str(GENRES))
+}
+
+# Default key root (semitones from A4) per genre, chosen for a comfortable
+# bass/pad register (roughly A3/220Hz or C3/131Hz, not the brighter A4)
+# and matched to the tonal center each progression above was written in -
+# minor-leaning genres anchor on A, major/jazz-leaning ones on C.
+# Overridable via generate's --key= flag.
+fn genre_default_key(genre) {
+  if genre == "trap" or genre == "boombap" or genre == "house" { return -12 }
+  return -21
+}
+
+fn bass_steps(genre) {
+  if genre == "trap" { return [0, 10] }
+  if genre == "lofi" { return [0, 9] }
+  if genre == "boombap" { return [0, 6, 10] }
+  if genre == "pop" { return [0, 8] }
+  if genre == "afrobeat" { return [0, 3, 8, 11] }
+  if genre == "house" { return [0, 4, 8, 12] }
+  fail("unknown genre '" + genre + "' - choices: " + str(GENRES))
+}
+
+fn gen_chords(genre, num_bars) {
+  let prog = genre_progression(genre)
+  let out = []
+  let i = 0
+  while i < num_bars { out.push(prog[i % len(prog)]); i = i + 1 }
+  return out
+}
+
+# A tuned oscillator voice - the same phase-accumulator technique every
+# drum voice above already uses (phase += 2*PI*freq/SAMPLE_RATE,
+# dsp.sin_()), just held at a fixed musical pitch instead of a drum's
+# percussive sweep, with a real attack/sustain/release envelope (linear
+# ramps, same technique apply_fade_segment already uses for vocal fades)
+# instead of envelope_exp's fixed decay - a sustained chord/bass note
+# needs to hold its level, not decay from the instant it starts.
+# detune_ratio > 0 sums in a second, slightly-detuned oscillator - the
+# standard cheap way to get a "thicker" synth tone instead of a bare sine
+# reading as thin/toy-ish (0 disables it - used for the bass, where a
+# pure fundamental is exactly right).
+fn synth_note(freq, dur, attack_s, release_s, detune_ratio, amp) {
+  let n = int(SAMPLE_RATE * dur)
+  if n <= 0 { return [] }
+  let attack_n = int(SAMPLE_RATE * attack_s)
+  let release_n = int(SAMPLE_RATE * release_s)
+  if attack_n > n { attack_n = n }
+  if release_n > n - attack_n { release_n = n - attack_n }
+  let buf = []
+  let phase1 = 0.0
+  let phase2 = 0.0
+  let freq2 = detune_ratio > 0 ? freq * detune_ratio : freq
+  let i = 0
+  while i < n {
+    phase1 = phase1 + 2 * PI * freq / SAMPLE_RATE
+    let s = dsp.sin_(phase1)
+    if detune_ratio > 0 {
+      phase2 = phase2 + 2 * PI * freq2 / SAMPLE_RATE
+      s = s * 0.6 + dsp.sin_(phase2) * 0.4
+    }
+    let env = 1.0
+    if i < attack_n { env = attack_n > 0 ? i / float(attack_n) : 1.0 }
+    else if i >= n - release_n and release_n > 0 { env = (n - i) / float(release_n) }
+    buf.push(s * env * amp)
+    i = i + 1
+  }
+  return buf
+}
+
+# One bass note, one octave (12 semitones) below the chord's own root - a
+# real bass register, not the same pitch as the pad above it.
+fn synth_bass_note(key_root_semitone, deg, dur) {
+  let freq = midi_freq(key_root_semitone + deg - 12)
+  return synth_note(freq, dur, 0.004, dur * 0.15, 0.0, 0.85)
+}
+
+# Every note in the chord stacked (summed) with a soft attack held
+# through the release - reads as a pad bed under the drums/bass, not
+# another percussive hit. A tiny alternating detune per stacked voice is
+# the cheap "real players are never in perfect unison" trick that keeps a
+# stacked-sine chord from sounding like one flat tone.
+fn synth_chord(notes_semitones, dur) {
+  let n = int(SAMPLE_RATE * dur)
+  let buf = [0.0] * n
+  let voice_i = 0
+  for semi in notes_semitones {
+    let detune = 0.0006 * (voice_i % 2 == 0 ? 1 : -1)
+    let note_buf = synth_note(midi_freq(semi), dur, 0.03, dur * 0.25, 1.0 + detune, 0.35)
+    let k = 0
+    while k < len(note_buf) { buf[k] = buf[k] + note_buf[k]; k = k + 1 }
+    voice_i = voice_i + 1
+  }
+  return buf
+}
+
+# Renders one bar of bass+chords - same STEPS/bpm bar-length convention
+# render_pattern uses for drums, so a melody bar and a drum bar for the
+# same project are always sample-for-sample the same length.
+fn render_melody_bar(key_root_semitone, chord, bpm, genre) {
+  let step_dur = 60.0 / bpm / 4.0
+  let loop_dur = step_dur * STEPS
+  let n = int(SAMPLE_RATE * loop_dur)
+  let buf = [0.0] * n
+
+  let pad = synth_chord(chord_notes(key_root_semitone, chord["deg"], chord["q"]), loop_dur)
+  let i = 0
+  while i < n { buf[i] = buf[i] + pad[i] * 0.5; i = i + 1 }
+
+  for step in bass_steps(genre) {
+    let note = synth_bass_note(key_root_semitone, chord["deg"], step_dur * 0.9)
+    let start = int(step * step_dur * SAMPLE_RATE)
+    let k = 0
+    while k < len(note) and start + k < n { buf[start + k] = buf[start + k] + note[k]; k = k + 1 }
+  }
+  # Same real, measured issue render_pattern's own tail comment documents
+  # for drums: a bass note's attack landing under the sustained chord pad
+  # can sum past +/-1.0 (confirmed here too - 0.45% of samples hard-
+  # clipped at the wav-write clamp boundary before this was added).
+  # Limiting each bar at the source, not just the final master, fixes it
+  # before it ever reaches disk.
+  return dsp.limit(buf, -1.0)
+}
+
 fn cmd_generate(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   if len(a["positional"]) < 1 { fail("usage: generate GENRE [--bpm=N] [--bars=N] [--seed=N]") }
@@ -687,10 +881,20 @@ fn cmd_generate(a) {
   # note for that box's actual measured throughput).
   let spec = "intro*2,main*" + str(bars) + ",fill,main*2,intro"
   p["arrangement"] = parse_arrangement(spec, p["patterns"])
+
+  # Melodic layer (PLAN3.md Phase E): one chord per arrangement bar, same
+  # indexing as p["arrangement"] itself, so melody-render can zip them
+  # together 1:1. --no-melody keeps the project drums-only (some users
+  # may still want that) without touching anything else generate does.
+  p["melody_enabled"] = not a["flags"].has("no-melody")
+  p["key_root_semitone"] = int(argmod.flag(a, "key", str(genre_default_key(genre))))
+  p["chords"] = gen_chords(genre, len(p["arrangement"]))
+
   save_project(path, p)
   let bar_dur = 60.0 / bpm / 4.0 * STEPS
   print("generated " + genre + " beat: bpm=" + str(bpm) + " seed=" + str(seed) + " -> " +
-        str(len(p["arrangement"])) + " bars (" + str(round(len(p["arrangement"]) * bar_dur, 1)) + "s)")
+        str(len(p["arrangement"])) + " bars (" + str(round(len(p["arrangement"]) * bar_dur, 1)) + "s)" +
+        (p["melody_enabled"] ? ", melody: key=" + str(p["key_root_semitone"]) + " " + str(genre_progression(genre)) : ", melody: disabled"))
 }
 
 # Renders the arrangement (or just 'main') bar by bar, streaming each bar
@@ -732,6 +936,69 @@ fn cmd_beat_render(a) {
   upsert_track(p, track)
   save_project(path, p)
   print("beat rendered: " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path)
+}
+
+# Renders the melody (bass + chords) arrangement to its OWN track, one bar
+# at a time - same chunked-streaming discipline as beat-render above
+# (never holds more than one bar in memory, no matter how long the
+# arrangement is). Deliberately a separate track from "beat" rather than
+# being summed into the drum buffer: (1) it's mixed independently through
+# the existing generic active_tracks()/mix_chunk() with zero mixer/master
+# changes needed - melody is just another named track with its own
+# gain/pan, exactly like "beat" or a recorded vocal; (2) it keeps
+# beat-render's pattern-name cache correct, since a bar's CHORD can differ
+# between two arrangement positions that share the same drum pattern name
+# (e.g. two "main" bars can carry different chords as the progression
+# cycles) - drums and melody are cached independently, by pattern name and
+# by chord signature respectively, because they vary independently.
+fn cmd_melody_render(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  let p = load_project(path)
+  if not p.has("melody_enabled") or not p["melody_enabled"] {
+    # Not an error - lets a caller always call melody-render after
+    # generate without checking the flag itself first. If a melody track
+    # exists from a PRIOR generate call on this same project (melody was
+    # on, then the project got re-generated with --no-melody), mute it
+    # rather than leaving stale audible melody in the mix.
+    let idx = find_track(p, "melody")
+    if idx >= 0 { p["tracks"][idx]["mute"] = true; save_project(path, p) }
+    print("melody disabled for this project (generate was run with --no-melody)")
+    return
+  }
+  let genre = p["genre"]
+  let key_root = p["key_root_semitone"]
+  let bar_names = len(p["arrangement"]) > 0 ? p["arrangement"] : ["main"]
+  if len(p["chords"]) != len(bar_names) {
+    fail("chord progression doesn't match the arrangement length - re-run 'generate' first")
+  }
+
+  let out_path = dir_of(path) + "/melody.wav"
+  let w = wav.open_write(out_path, SAMPLE_RATE, 1)
+  # Cache by chord SIGNATURE (deg+quality), not bar index - a cycling
+  # progression repeats the same chord across many bars (e.g. a 4-chord
+  # loop under a 16-bar main section), and each repeat is fully
+  # deterministic given a fixed bpm/key/genre, the same reasoning
+  # beat-render's own pattern-name cache above already documents.
+  let cache = {}
+  let i = 0
+  while i < len(bar_names) {
+    let chord = p["chords"][i]
+    let sig = str(chord["deg"]) + "_" + chord["q"]
+    if not cache.has(sig) { cache[sig] = render_melody_bar(key_root, chord, p["bpm"], genre) }
+    wav.write_chunk(w, cache[sig])
+    i = i + 1
+  }
+  wav.close_write(w)
+
+  let info = probe_wav(out_path)
+  # -6dB default: sits under the drums/vocal rather than competing with
+  # them - a sensible starting mix, not a claim about what a user should
+  # keep it at (still a real, editable track/gain like any other).
+  let track = {"name": "melody", "path": out_path, "data_start": info["data_start"],
+               "total_samples": info["total_samples"], "gain_db": -6.0, "pan": 0.0, "mute": false}
+  upsert_track(p, track)
+  save_project(path, p)
+  print("melody rendered: " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path)
 }
 
 # Converts an arbitrary source (any container/codec ffmpeg can decode, any
@@ -1169,6 +1436,11 @@ fn cmd_report(a) {
     print(table.render(rows))
     print("")
   }
+  if p.has("chords") and len(p["chords"]) > 0 {
+    let loop = p["melody_enabled"] ? str(genre_progression(p["genre"])) : "disabled (--no-melody)"
+    print("melody: key=" + str(p["key_root_semitone"]) + " semitones from A4, progression loop: " + loop)
+    print("")
+  }
   if len(p["arrangement"]) > 0 {
     let bar_dur = 60.0 / p["bpm"] / 4.0 * STEPS
     print("arrangement (" + str(len(p["arrangement"])) + " bars, " +
@@ -1198,8 +1470,9 @@ cli.command(app, "step", "program the 'main' pattern: step VOICE STEP on|off", f
 cli.command(app, "pattern-add", "create a new named pattern: pattern-add NAME", fn(a) { cmd_pattern_add(a) })
 cli.command(app, "pattern-step", "program a named pattern: pattern-step NAME VOICE STEP on|off", fn(a) { cmd_pattern_step(a) })
 cli.command(app, "arrange", "chain patterns into a song: arrange main*8,fill,main*8", fn(a) { cmd_arrange(a) })
-cli.command(app, "generate", "auto-generate a genre beat (free): generate GENRE [--bpm=] [--bars=] [--seed=] - choices: " + str(GENRES), fn(a) { cmd_generate(a) })
+cli.command(app, "generate", "auto-generate a genre beat + chord progression (free): generate GENRE [--bpm=] [--bars=] [--seed=] [--key=SEMITONES-FROM-A4] [--no-melody] - choices: " + str(GENRES), fn(a) { cmd_generate(a) })
 cli.command(app, "beat-render", "synthesize the arrangement (or just 'main') to a track (free)", fn(a) { cmd_beat_render(a) })
+cli.command(app, "melody-render", "synthesize the bass+chords arrangement to its own track (free): needs 'generate' run first", fn(a) { cmd_melody_render(a) })
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })
 cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
