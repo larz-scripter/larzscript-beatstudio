@@ -1,6 +1,47 @@
 # PLAN 5: chord-aware auto-harmony, real loudness targeting, stems, UX polish
 
-Status: **planning, then built in the same session.**
+Status: **SHIPPED and DEPLOYED, 2026-08-05** (larzos.com/beatstudio/).
+All four phases (M/N/O/P) built, tested, and live. No new native
+interpreter release needed this round - every new capability (the
+chord-aware harmonizer, LUFS metering) was built entirely on native-
+v1.40.0's existing PSOLA/pitch-detection/biquad primitives.
+
+**What shipped:**
+- **M**: `harmonize NAME --interval=third|fifth` - a genuinely chord-
+  aware diatonic harmonizer (the active scale is re-derived per-frame
+  from whichever chord is actually sounding, not one fixed scale).
+  Verified with two independently-computed tests: a major chord's root
+  harmonized to a major third (164.55Hz vs 164.81Hz expected, 0.16%
+  error); the same request against a minor chord correctly produced a
+  MINOR third instead (262.5Hz vs 261.63Hz, clearly distinct from the
+  277.18Hz a wrong major-third result would have given).
+- **N**: real (approximated, honestly disclosed) LUFS integrated-
+  loudness metering + `--target-lufs=` streaming target. A real,
+  disclosed two-pass design - a cheap measurement-only pre-pass, the
+  expensive native EQ/compressor/limiter still runs once. Verified:
+  perfectly linear level response (exact 6dB-in/6dB-out), correct
+  frequency weighting (bass reads quieter, presence range reads
+  louder), and monotonic real-world behavior (-14 target measured
+  -16.65 actual on live production, -23 target measured -22.28 -
+  precision genuinely degrades near the limiter for loud targets, as
+  disclosed in the docs, not hidden).
+- **O**: real stem export (every rendered track published individually,
+  not just the final mix) + staged processing status (real stage names
+  like "Correcting pitch..."/"Mastering your track..." instead of one
+  static message for the whole wait).
+- **P**: all of the above wired into the UI, plus a real-time level
+  meter during PLAYBACK (not just recording).
+
+**Live production verification**: a real vocal upload with autotune
+strength=0.7 + harmonize produced 4 real published stems (beat/melody/
+vocal/vocal_harmony); staged status genuinely showed real progress
+("Rendering the beat..." -> "Rendering bass & chords..." ->
+"Mixing your preview..." -> "done") across the actual wait, not a
+static message; a real -14 LUFS target rerender measured -16.65 LUFS
+actual on the live master. Zero errors in beatstudio_process.log, srv66
+disk unchanged (26G/49G). 10/10 beatstudio.lz tests, native interpreter
+unchanged from round 2's native-v1.40.0 (35/35 tests still pass, no
+new native code this round).
 
 ## Why
 
