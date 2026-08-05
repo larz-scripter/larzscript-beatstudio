@@ -1879,6 +1879,44 @@ fn render_stream(p, out_path, master_params) {
   if total == 0 { fail("no audible tracks to mix - add a track first") }
   let w = wav.open_write(out_path, SAMPLE_RATE, 2)
 
+  # PLAN5.md Phase N: an optional lightweight measurement-only pre-pass
+  # to compute how much pre-gain is needed to hit a target LUFS - the
+  # one deliberate exception to single-pass streaming here (same
+  # rationale `double`/`autotune` already established for being
+  # whole-buffer). Writes NOTHING to disk and skips the expensive native
+  # EQ/compressor/limiter entirely - it only mixes (already fast,
+  # native) and accumulates a running K-weighted sum, a real second
+  # pass but a cheap one, not a second full master render. Fresh
+  # track_states here (not shared with the real pass below) - the
+  # per-track filters/compressor/delay carry real history, and reusing
+  # the same state dict across two full passes would start the real
+  # pass with leftover state from the measurement pass instead of a
+  # clean slate.
+  let pregain_db = 0.0
+  if master_params != nil and tget(master_params, "target_lufs", nil) != nil {
+    let measure_states = {}
+    for tr in active_tracks(p) {
+      let st = build_track_strip(tr)
+      if st != nil { measure_states[tr["name"]] = st }
+    }
+    let lufs_state = dsp.lufs_new(SAMPLE_RATE)
+    let mchunks = ceil_div(total, CHUNK_SAMPLES)
+    let mi = 0
+    while mi < mchunks {
+      let mstart = mi * CHUNK_SAMPLES
+      let mlen = total - mstart
+      if mlen > CHUNK_SAMPLES { mlen = CHUNK_SAMPLES }
+      let mmixed = mix_chunk(p, mstart, mlen, measure_states)
+      dsp.lufs_process_buffer(lufs_state, mmixed["l"], mmixed["r"])
+      mi = mi + 1
+    }
+    let current_lufs = dsp.lufs_result(lufs_state)
+    pregain_db = master_params["target_lufs"] - current_lufs
+    if pregain_db > 24.0 { pregain_db = 24.0 }
+    if pregain_db < -24.0 { pregain_db = -24.0 }
+  }
+  let pregain_linear = dsp.db_to_linear(pregain_db)
+
   # Per-track channel strips (PLAN3.md Phase F) - built ONCE for the whole
   # render, same reason the master filters below are: their state (biquad
   # history, compressor envelope, delay line) needs to persist across
@@ -1909,6 +1947,12 @@ fn render_stream(p, out_path, master_params) {
   let width = master_params != nil ? tget(master_params, "width", 1.0) : 1.0
   let saturation_drive = master_params != nil ? tget(master_params, "saturation_drive", 0.0) : 0.0
 
+  # Real, measured final loudness (not just the pre-render target) -
+  # only built when a target was actually requested, so a plain render
+  # pays nothing extra for it.
+  let wants_lufs = master_params != nil and tget(master_params, "target_lufs", nil) != nil
+  let final_lufs_state = wants_lufs ? dsp.lufs_new(SAMPLE_RATE) : nil
+
   let peak = 0.0
   let sum_sq = 0.0
   let n_samples_seen = 0
@@ -1921,6 +1965,10 @@ fn render_stream(p, out_path, master_params) {
     let mixed = mix_chunk(p, start, this_len, track_states)
     let l = mixed["l"]
     let r = mixed["r"]
+    if pregain_db != 0.0 {
+      l = _native_scale_buffer(l, pregain_linear)
+      r = _native_scale_buffer(r, pregain_linear)
+    }
     if filters != nil {
       # Stereo widening, then saturation, both ahead of the fused
       # EQ->compressor->limiter block below - keeps the limiter as the
@@ -1959,6 +2007,7 @@ fn render_stream(p, out_path, master_params) {
     if pk > peak { peak = pk }
     sum_sq = sum_sq + _native_sum_sq(l) + _native_sum_sq(r)
     n_samples_seen = n_samples_seen + this_len * 2
+    if final_lufs_state != nil { dsp.lufs_process_buffer(final_lufs_state, l, r) }
 
     let interleaved = [0.0] * (this_len * 2)
     let i = 0
@@ -1971,7 +2020,8 @@ fn render_stream(p, out_path, master_params) {
   let peak_dbfs = peak > 0 ? dsp.linear_to_db(peak) : -120.0
   let rms = n_samples_seen > 0 ? sqrt(sum_sq / n_samples_seen) : 0.0
   let rms_dbfs = rms > 0 ? dsp.linear_to_db(rms) : -120.0
-  return {"peak_dbfs": peak_dbfs, "rms_dbfs": rms_dbfs, "total_samples": total}
+  let final_lufs = final_lufs_state != nil ? dsp.lufs_result(final_lufs_state) : nil
+  return {"peak_dbfs": peak_dbfs, "rms_dbfs": rms_dbfs, "total_samples": total, "lufs": final_lufs}
 }
 
 fn cmd_preview(a) {
@@ -2014,6 +2064,10 @@ fn master_params_from_flags(a) {
   #     target for this chain, not an approximation of one.
   #   width         = stereo width (1.0 unchanged, >1 wider, <1 narrower)
   #   saturation    = harmonic saturation drive (0 = off)
+  #   target-lufs   = PLAN5.md Phase N - an optional streaming loudness
+  #     target (e.g. -14 for Spotify/YouTube); unset (default) means no
+  #     pre-gain pass at all, Loudness/ceiling above stays the only
+  #     control, exactly as before this phase.
   let preset_name = argmod.flag(a, "preset", nil)
   let base = preset_name != nil ? mastering_preset(preset_name) :
     {"low":1.5,"mid":0.0,"high":2.0,"thresh":-14.0,"ratio":3.0,"ceiling":-1.0,"width":1.0,"saturation":0.0}
@@ -2025,9 +2079,11 @@ fn master_params_from_flags(a) {
   let ceiling_db = float(argmod.flag(a, "ceiling", str(base["ceiling"])))
   let width = float(argmod.flag(a, "width", str(base["width"])))
   let saturation = float(argmod.flag(a, "saturation", str(base["saturation"])))
+  let target_lufs_str = argmod.flag(a, "target-lufs", nil)
+  let target_lufs = target_lufs_str != nil ? float(target_lufs_str) : nil
   return {"low_db": low_db, "mid_db": mid_db, "high_db": high_db,
           "thresh_db": thresh_db, "ratio": ratio, "ceiling_db": ceiling_db,
-          "width": width, "saturation_drive": saturation}
+          "width": width, "saturation_drive": saturation, "target_lufs": target_lufs}
 }
 
 fn run_master_render(path, p, master_params, price_cents) {
@@ -2042,11 +2098,13 @@ fn run_master_render(path, p, master_params, price_cents) {
   # this is the workaround until it's fixed.
   let final_peak = result["peak_dbfs"]
   let final_rms = result["rms_dbfs"]
+  let final_lufs = tget(result, "lufs", nil)
   p["masters"].push({"path": out_path, "price_cents": price_cents,
-                      "peak_dbfs": final_peak, "rms_dbfs": final_rms})
+                      "peak_dbfs": final_peak, "rms_dbfs": final_rms, "lufs": final_lufs})
   save_project(path, p)
   print("mastered -> " + out_path)
-  print("peak: " + str(round(result["peak_dbfs"], 2)) + " dBFS, rms: " + str(round(result["rms_dbfs"], 2)) + " dBFS")
+  print("peak: " + str(round(result["peak_dbfs"], 2)) + " dBFS, rms: " + str(round(result["rms_dbfs"], 2)) + " dBFS" +
+        (final_lufs != nil ? ", loudness: " + str(round(final_lufs, 2)) + " LUFS (approx.)" : ""))
   return out_path
 }
 
@@ -2152,8 +2210,8 @@ cli.command(app, "harmonize", "chord-aware auto-harmony as a new track (free, <=
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
 cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--reverb-mix=] [--reverb-feedback=] [--clear]", fn(a) { cmd_strip(a) })
 cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })
-cli.command(app, "master", "paid: full EQ->compressor->limiter chain: master --price=DOLLARS [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=]", fn(a) { cmd_master(a) })
-cli.command(app, "remaster", "free after the first paid master: re-render with new settings, no re-charge: remaster [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=]", fn(a) { cmd_remaster(a) })
+cli.command(app, "master", "paid: full EQ->compressor->limiter chain: master --price=DOLLARS [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=] [--target-lufs=N e.g. -14 for streaming]", fn(a) { cmd_master(a) })
+cli.command(app, "remaster", "free after the first paid master: re-render with new settings, no re-charge: remaster [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=] [--target-lufs=N]", fn(a) { cmd_remaster(a) })
 cli.command(app, "report", "show the pattern, tracks, and budget", fn(a) { cmd_report(a) })
 
 cli.run(app, args)
