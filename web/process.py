@@ -44,7 +44,8 @@ LOCK_PATH = "/opt/beatstudio/.process.lock"
 DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1, "melody": True, "targetSeconds": 0}
 
 DEFAULT_STRIP = {"eqLow": 0.0, "eqMid": 0.0, "eqHigh": 0.0, "compThresh": 0.0, "compRatio": 3.0,
-                  "duckFrom": None, "delayMs": 0.0, "delayFeedback": 0.3, "delayMix": 0.0}
+                  "duckFrom": None, "delayMs": 0.0, "delayFeedback": 0.3, "delayMix": 0.0,
+                  "reverbMix": 0.0, "reverbFeedback": 0.4}
 
 DEFAULT_PARAMS = {
     "tracks": {
@@ -213,6 +214,9 @@ def apply_strip(project, name, strip, existing, log_prefix, d):
         flags.append("--delay-ms=" + str(strip["delayMs"]))
         flags.append("--delay-feedback=" + str(strip["delayFeedback"]))
         flags.append("--delay-mix=" + str(strip["delayMix"]))
+    if strip.get("reverbMix", 0.0) > 0.0:
+        flags.append("--reverb-mix=" + str(strip["reverbMix"]))
+        flags.append("--reverb-feedback=" + str(strip.get("reverbFeedback", 0.4)))
     p = run(BEATSTUDIO + ["strip", name] + flags + ["--file=" + project])
     if p.returncode != 0:
         write_status(d, "error", message=log_prefix + ": couldn't set '" + name + "' channel strip", detail=p.stdout[-800:])
@@ -421,10 +425,25 @@ def process_uploaded(session_id, d):
             write_status(d, "error", message="voice editing failed", detail=p.stdout[-800:])
             return
 
-    # PLAN3.md Phase G quick double/harmony - runs on the CLEANED vocal
-    # (after voice-edit above, not the raw take), so the doubled layer
-    # gets the same autotrim/gate/de-ess benefit the main vocal does
-    # rather than doubling the noisier raw recording.
+    # PLAN4.md Phase J real pitch correction - runs on the CLEANED vocal
+    # (after voice-edit above), and BEFORE double below so a harmony
+    # layer is built from the already-corrected pitch, not the raw one.
+    # strength=0 (default) is a true no-op on the beatstudio.lz side, so
+    # this call is always safe to make unconditionally when a manifest
+    # exists - matches apply_strip's own "always send, let the engine
+    # no-op" convention above.
+    if fx and fx.get("autotuneStrength", 0.0) > 0.0:
+        at_flags = ["--strength=" + str(fx["autotuneStrength"]), "--key=" + str(fx.get("autotuneKey", 0.0))]
+        if fx.get("autotuneScale"):
+            at_flags.append("--scale=" + fx["autotuneScale"])
+        p = run(BEATSTUDIO + ["autotune", "vocal"] + at_flags + ["--file=" + project], timeout=300)
+        if p.returncode != 0:
+            write_status(d, "error", message="pitch correction failed", detail=p.stdout[-800:])
+            return
+
+    # PLAN3.md Phase G quick double/harmony - runs on the CLEANED (and now
+    # possibly pitch-corrected) vocal, so the doubled layer gets the same
+    # benefit the main vocal does rather than doubling the raw recording.
     if fx and fx.get("double"):
         p = run(BEATSTUDIO + ["double", "vocal", "--semitones=" + str(fx.get("doubleSemitones", 0.15)),
                                "--file=" + project], timeout=180)

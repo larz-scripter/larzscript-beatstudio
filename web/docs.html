@@ -68,6 +68,8 @@ footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); fo
       <a href="#loudness">Loudness</a>
       <a href="#width">Stereo width</a>
       <a href="#saturation">Saturation</a>
+      <a href="#autotune">Autotune</a>
+      <a href="#reverb">Reverb</a>
     </nav>
   </header>
 
@@ -136,6 +138,21 @@ footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); fo
     <p class="default">Default: 0 (off)</p>
     <p>Adds subtle harmonic <b>warmth/grit</b> using soft-clip waveshaping (the same math family real analog-modeling plugins use to emulate tape or tube gear) — it gently rounds off the loudest peaks instead of leaving them perfectly clean, which the ear reads as "warmer" or "louder-feeling" even at the same measured level. 0 is completely off (no coloration at all); higher numbers push the effect harder.</p>
     <div class="try"><b>Try this:</b> 1-2 is a subtle, "analog" polish most tracks can take without sounding different in an obvious way. Above 3 it becomes a deliberate, gritty character effect — great for some genres (trap, lo-fi), too much for others (clean pop, acoustic).</div>
+  </section>
+
+  <section class="entry" id="autotune">
+    <h2>Autotune (pitch correction) <span class="range">0 (off) to 100%</span></h2>
+    <p class="default">Default: off. Key/scale default to "any note" (chromatic)</p>
+    <p>Detects the actual pitch you sang, in real time across your whole recording, and nudges it toward the nearest correct note. This is real pitch detection + pitch-shifting (the same family of technique commercial pitch-correction tools use) - not a filter or an EQ trick. <b>Strength</b> controls how far it corrects: low values (10-40%) give a natural nudge that fixes off-key moments without sounding processed; high values (80-100%) snap instantly to the nearest note for the obvious, robotic "auto-tuned" vocal effect. Unlike most pitch-shift tricks, this one changes pitch WITHOUT changing your timing/tempo.</p>
+    <p><b>Key/scale</b> optionally restricts which notes count as "correct" - pick a scale to lock correction to just that key's notes; leave it on "any note" for a more general pitch cleanup that doesn't assume a specific key.</p>
+    <div class="try"><b>Try this:</b> start around 30-50% strength with no key/scale set - it'll clean up pitch wobbles while still sounding like you. Push toward 100% only if you specifically want the obvious hard-tune effect.</div>
+  </section>
+
+  <section class="entry" id="reverb">
+    <h2>Reverb <span class="range">Amount 0-100% &middot; Decay 0-85%</span></h2>
+    <p class="default">Default: off</p>
+    <p>A real algorithmic reverb (multiple overlapping echo/delay lines combined, the classic technique behind most reverb plugins) that adds a sense of space/room around a track, distinct from the single-repeat Delay/echo send above. <b>Amount</b> is how much of the reverb tail gets mixed in; <b>Decay</b> is how long that tail rings out before fading away.</p>
+    <div class="try"><b>Try this:</b> a small amount (10-20%) on a vocal can make a dry bedroom recording feel more like a real room without becoming obviously "wet." Push both higher for a deliberate ambient/spacious effect.</div>
   </section>
 
   <section class="entry">

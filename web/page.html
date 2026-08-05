@@ -227,6 +227,14 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <span class="val" id="bpm-val">90 BPM</span>
       </div>
       <label class="melody-toggle"><input type="checkbox" id="melody-toggle" checked> Bass &amp; chords <span class="hint">— a real generated chord progression under the drums, genre-matched. Uncheck for drums only.</span></label>
+      <div class="section-label" style="margin-top:18px">Song length</div>
+      <div class="preset-row" id="length-row">
+        <button type="button" class="preset-chip active" data-seconds="0">Quick preview</button>
+        <button type="button" class="preset-chip" data-seconds="60">1 minute</button>
+        <button type="button" class="preset-chip" data-seconds="180">3 minutes</button>
+        <button type="button" class="preset-chip" data-seconds="300">5 minutes</button>
+      </div>
+      <p class="sub" style="margin:-8px 0 0">A real song structure (intro, verse, chorus, bridge) once you pick a length — quick preview stays a short loop for fast genre browsing.</p>
       <div class="mixer-actions" style="margin-top:16px">
         <button class="btn-primary" id="generate-btn">Generate a new beat</button>
         <span class="mixer-note" id="beatgen-status" style="margin-top:0"></span>
@@ -271,7 +279,7 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <label class="fx-toggle"><input type="checkbox" id="fx-autotrim" checked> Auto-trim leading silence <span class="hint">— trims dead air before you start talking/singing</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-gate"> Noise gate <span class="hint">— quiets room noise between phrases</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-deess"> De-esser <span class="hint">— tames harsh "S"/"T" sounds</span></label>
-        <label class="fx-toggle"><input type="checkbox" id="fx-double"> Quick double <span class="hint">— layers a subtly detuned copy for thickness. Changes pitch and timing slightly, by design.</span></label>
+        <label class="fx-toggle"><input type="checkbox" id="fx-double"> Quick double <span class="hint">— layers a copy for thickness/harmony. Pitch shifted, timing preserved.</span></label>
         <div class="ctrl-row">
           <label>Fade in</label>
           <input type="range" id="fx-fadein" min="0" max="2" step="0.05" value="0.05">
@@ -281,6 +289,25 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
           <label>Fade out</label>
           <input type="range" id="fx-fadeout" min="0" max="3" step="0.05" value="0.3">
           <span class="val" id="fx-fadeout-val">0.3s</span>
+        </div>
+        <div class="adv-sub" style="margin-top:16px">Pitch correction (autotune) <a class="info-dot" href="docs/#autotune" target="_blank">?</a></div>
+        <div class="ctrl-row">
+          <label>Strength</label>
+          <input type="range" id="fx-autotune" min="0" max="1" step="0.05" value="0">
+          <span class="val" id="fx-autotune-val">off</span>
+        </div>
+        <div style="display:flex; gap:10px; margin:10px 0 4px">
+          <select id="fx-autotune-key" style="flex:1; background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px">
+            <option value="0">A</option><option value="1">A#/Bb</option><option value="2">B</option>
+            <option value="3">C</option><option value="4">C#/Db</option><option value="5">D</option>
+            <option value="6">D#/Eb</option><option value="7">E</option><option value="8">F</option>
+            <option value="9">F#/Gb</option><option value="10">G</option><option value="11">G#/Ab</option>
+          </select>
+          <select id="fx-autotune-scale" style="flex:1; background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px">
+            <option value="">Any note (chromatic)</option>
+            <option value="major">Major scale</option>
+            <option value="minor">Minor scale</option>
+          </select>
         </div>
       </div>
 
@@ -371,6 +398,9 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <div class="ctrl-row"><label>Time</label><input type="range" data-strip="delayMs" min="0" max="800" step="10" value="0"><span class="val" data-readout="delayMs">off</span></div>
         <div class="ctrl-row"><label>Feedback</label><input type="range" data-strip="delayFeedback" min="0" max="0.9" step="0.05" value="0.3"><span class="val" data-readout="delayFeedback">30%</span></div>
         <div class="ctrl-row"><label>Mix</label><input type="range" data-strip="delayMix" min="0" max="1" step="0.05" value="0"><span class="val" data-readout="delayMix">0%</span></div>
+        <div class="adv-sub">Reverb <a class="info-dot" href="docs/#reverb" target="_blank">?</a></div>
+        <div class="ctrl-row"><label>Amount</label><input type="range" data-strip="reverbMix" min="0" max="1" step="0.05" value="0"><span class="val" data-readout="reverbMix">off</span></div>
+        <div class="ctrl-row"><label>Decay</label><input type="range" data-strip="reverbFeedback" min="0" max="0.85" step="0.05" value="0.4"><span class="val" data-readout="reverbFeedback">40%</span></div>
       </div>
     </div>
     <div class="mix-panel" data-track="melody" id="melody-panel" style="display:none">
@@ -561,7 +591,7 @@ function makeSimpleDeck(name, src){
 const sessionId = "bs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 const GENRE_DEFAULT_BPM = { trap: 140, lofi: 80, boombap: 90, pop: 120, afrobeat: 105, house: 128 };
-let currentBeat = { genre: "boombap", bpm: 90 };
+let currentBeat = { genre: "boombap", bpm: 90, targetSeconds: 0 };
 let beatReady = false;
 let beatgenDeck = null;
 
@@ -571,6 +601,14 @@ const bpmSlider = document.getElementById("bpm-slider");
 const bpmVal = document.getElementById("bpm-val");
 const melodyToggle = document.getElementById("melody-toggle");
 const melodyPanel = document.getElementById("melody-panel");
+
+document.querySelectorAll("#length-row .preset-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    document.querySelectorAll("#length-row .preset-chip").forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    currentBeat.targetSeconds = Number(chip.dataset.seconds);
+  });
+});
 
 function setBeatgenStatus(msg, cls){ beatgenStatus.textContent = msg || ""; beatgenStatus.style.color = cls === "err" ? "var(--ember)" : cls === "ok" ? "var(--hot)" : ""; }
 
@@ -595,7 +633,7 @@ generateBtn.addEventListener("click", async () => {
   try {
     const res = await fetch(API + "/beat?session=" + sessionId, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ genre: currentBeat.genre, bpm: currentBeat.bpm, bars: 4, melody: melodyToggle.checked }),
+      body: JSON.stringify({ genre: currentBeat.genre, bpm: currentBeat.bpm, bars: 4, melody: melodyToggle.checked, targetSeconds: currentBeat.targetSeconds }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "request failed");
@@ -882,6 +920,7 @@ document.getElementById("preview-arrangement-btn").addEventListener("click", asy
 });
 
 function collectFx(){
+  const scale = document.getElementById("fx-autotune-scale").value;
   return {
     fadeIn: Number(document.getElementById("fx-fadein").value),
     fadeOut: Number(document.getElementById("fx-fadeout").value),
@@ -890,10 +929,14 @@ function collectFx(){
     deess: document.getElementById("fx-deess").checked,
     double: document.getElementById("fx-double").checked,
     doubleSemitones: 0.15,
+    autotuneStrength: Number(document.getElementById("fx-autotune").value),
+    autotuneKey: Number(document.getElementById("fx-autotune-key").value),
+    autotuneScale: scale || null,
   };
 }
 wireSlider(document.getElementById("fx-fadein"), v => Number(v).toFixed(2) + "s");
 wireSlider(document.getElementById("fx-fadeout"), v => Number(v).toFixed(2) + "s");
+wireSlider(document.getElementById("fx-autotune"), v => Number(v) === 0 ? "off" : Math.round(Number(v)*100) + "%");
 
 document.getElementById("use-arrangement-btn").addEventListener("click", async () => {
   if (takes.length === 0) { setStatus("Record at least one take first.", "err"); return; }
@@ -975,7 +1018,7 @@ const DEFAULTS = {
     vocal:  { gain: 2,  pan: 0, mute: false },
     melody: { gain: -6, pan: 0, mute: false },
   },
-  strip: { eqLow: 0, eqMid: 0, eqHigh: 0, compThresh: 0, compRatio: 3, delayMs: 0, delayFeedback: 0.3, delayMix: 0 },
+  strip: { eqLow: 0, eqMid: 0, eqHigh: 0, compThresh: 0, compRatio: 3, delayMs: 0, delayFeedback: 0.3, delayMix: 0, reverbMix: 0, reverbFeedback: 0.4 },
   master: { low: 2, mid: 0.5, high: 3, thresh: -14, ratio: 3, ceiling: -1, width: 1, saturation: 0 },
 };
 
@@ -1016,7 +1059,7 @@ document.querySelectorAll('input[data-strip="eqLow"], input[data-strip="eqMid"],
 document.querySelectorAll('input[data-strip="compThresh"]').forEach(el => wireSlider(el, fmtThresh));
 document.querySelectorAll('input[data-strip="compRatio"]').forEach(el => wireSlider(el, v => Number(v).toFixed(1) + ":1"));
 document.querySelectorAll('input[data-strip="delayMs"]').forEach(el => wireSlider(el, fmtDelayMs));
-document.querySelectorAll('input[data-strip="delayFeedback"], input[data-strip="delayMix"]').forEach(el => wireSlider(el, fmtPct));
+document.querySelectorAll('input[data-strip="delayFeedback"], input[data-strip="delayMix"], input[data-strip="reverbMix"], input[data-strip="reverbFeedback"]').forEach(el => wireSlider(el, fmtPct));
 wireSlider(document.querySelector('input[data-master="low"]'), fmtDb);
 wireSlider(document.querySelector('input[data-master="mid"]'), fmtDb);
 wireSlider(document.querySelector('input[data-master="high"]'), fmtDb);
@@ -1035,9 +1078,9 @@ document.querySelectorAll('#master-panel input[data-master]').forEach(input => {
 
 function setActivePreset(name){
   activePreset = name;
-  document.querySelectorAll(".preset-chip").forEach(c => c.classList.toggle("active", c.dataset.preset === name));
+  document.querySelectorAll("#preset-row .preset-chip").forEach(c => c.classList.toggle("active", c.dataset.preset === name));
 }
-document.querySelectorAll(".preset-chip").forEach(chip => {
+document.querySelectorAll("#preset-row .preset-chip").forEach(chip => {
   chip.addEventListener("click", () => {
     const name = chip.dataset.preset;
     if (name === "custom") { setActivePreset("custom"); return; }

@@ -53,6 +53,12 @@ DELAY_MIX_RANGE = (0.0, 1.0)
 MASTER_PRESETS = ("loud", "warm", "clean")
 TRACK_NAMES = ("beat", "vocal", "melody")
 DOUBLE_SEMITONES_RANGE = (-12.0, 12.0)
+# PLAN4.md Phase K/L ranges.
+REVERB_MIX_RANGE = (0.0, 1.0)
+REVERB_FEEDBACK_RANGE = (0.0, 0.85)
+AUTOTUNE_STRENGTH_RANGE = (0.0, 1.0)
+AUTOTUNE_KEY_RANGE = (-24.0, 24.0)
+AUTOTUNE_SCALES = ("major", "minor")
 
 # Mirrors beatstudio.lz's own GENRES list - kept in sync by hand (small,
 # rarely-changing list; not worth a shared-file mechanism for six names).
@@ -125,6 +131,10 @@ def normalize_strip(raw):
         "delayMs": clamp(raw.get("delayMs", 0.0), *DELAY_MS_RANGE),
         "delayFeedback": clamp(raw.get("delayFeedback", 0.3), *DELAY_FEEDBACK_RANGE),
         "delayMix": clamp(raw.get("delayMix", 0.0), *DELAY_MIX_RANGE),
+        # PLAN4.md Phase K - a real algorithmic reverb, alongside (not
+        # instead of) the single-tap delay/echo above.
+        "reverbMix": clamp(raw.get("reverbMix", 0.0), *REVERB_MIX_RANGE),
+        "reverbFeedback": clamp(raw.get("reverbFeedback", 0.4), *REVERB_FEEDBACK_RANGE),
     }
 
 
@@ -228,15 +238,25 @@ def normalize_manifest(raw):
     if not isinstance(fx_in, dict):
         fx_in = {}
     double_semitones = clamp(fx_in.get("doubleSemitones", 0.15), *DOUBLE_SEMITONES_RANGE)
+    # PLAN4.md Phase J - real pitch correction. strength=0 (default) is a
+    # true no-op on the beatstudio.lz side (skips the whole detect/shift
+    # pass), matching this feature staying off unless explicitly asked for.
+    autotune_scale = fx_in.get("autotuneScale")
+    if autotune_scale not in AUTOTUNE_SCALES:
+        autotune_scale = None
     fx = {
         "fadeIn": clamp(fx_in.get("fadeIn", 0.0), *FADE_RANGE),
         "fadeOut": clamp(fx_in.get("fadeOut", 0.0), *FADE_RANGE),
         "autotrim": bool(fx_in.get("autotrim", False)),
         "gate": bool(fx_in.get("gate", False)),
         "deess": bool(fx_in.get("deess", False)),
+        "autotuneStrength": clamp(fx_in.get("autotuneStrength", 0.0), *AUTOTUNE_STRENGTH_RANGE),
+        "autotuneKey": clamp(fx_in.get("autotuneKey", 0.0), *AUTOTUNE_KEY_RANGE),
+        "autotuneScale": autotune_scale,
         # PLAN3.md Phase G: a cheap "quick double" for thickening/harmony -
-        # see beatstudio.lz's `double` command for the real pitch+tempo
-        # tradeoff this makes (disclosed there, not hidden here either).
+        # now real PSOLA by default (PLAN4.md Phase K) - see beatstudio.lz's
+        # `double` command for the one remaining disclosed tradeoff on its
+        # explicit --resample fallback path.
         "double": bool(fx_in.get("double", False)),
         "doubleSemitones": double_semitones,
     }
