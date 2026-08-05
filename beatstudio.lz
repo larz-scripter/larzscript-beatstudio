@@ -1473,10 +1473,62 @@ fn apply_fade_segment(buf, rel_start, seg_len, g0, g1) {
   while k < seg_len { buf[rel_start + k] = faded[k]; k = k + 1 }
 }
 
+# PLAN8.md "even out volume by section" - evaluates a piecewise-linear
+# gain-envelope (in dB) at absolute time t_sec, given `env` (a list of N
+# dB values, one per equal-length segment spanning the track) and
+# `total_sec` (the track's total duration AFTER autotrim - matches
+# whatever the visitor's client-side preview measured, so what's
+# previewed is what renders). Interpolates between SEGMENT CENTERS (not
+# edges) so the curve is smooth all the way through each segment, not
+# just flat blocks meeting at hard edges - the same "ramp between
+# center points" shape the client's Web Audio preview schedules with
+# linearRampToValueAtTime, so a visitor hears the SAME curve they're
+# about to render, not an approximation of it.
+fn envelope_db_at(env, total_sec, t_sec) {
+  let n = len(env)
+  if n == 0 { return 0.0 }
+  if n == 1 { return env[0] }
+  let seg_sec = total_sec / float(n)
+  if seg_sec <= 0.0 { return env[0] }
+  let pos = t_sec / seg_sec - 0.5
+  if pos <= 0.0 { return env[0] }
+  if pos >= n - 1 { return env[n - 1] }
+  let i0 = int(pos)
+  let frac = pos - i0
+  return env[i0] + (env[i0 + 1] - env[i0]) * frac
+}
+
+# Real bug caught by measurement, not review: a first version of the
+# gain-envelope feature applied one _native_fade_buffer ramp per fixed
+# 10s CHUNK_SAMPLES chunk, using the envelope's value at that CHUNK's own
+# start/end. That's only correct when a chunk never spans a segment-
+# center breakpoint - true for a long recording with few, wide segments,
+# false for anything shorter (e.g. an 8-segment envelope over a 24s clip
+# has 6s segments, smaller than the 10s chunk) - a chunk straddling two
+# segment centers produced a nearly-flat ramp between whatever the two
+# ENDPOINTS happened to be, silently erasing any peak/dip that fell
+# strictly inside that chunk (measured: a center meant to read +6dB came
+# back at -4dB). Fixed by finding the next segment-center breakpoint and
+# capping the chunk there when it would otherwise cross it - the ramp
+# applied to any one chunk is then always a genuinely straight piece of
+# the true piecewise-linear curve, not an approximation of a curve.
+fn next_gain_env_breakpoint(edited_total, gain_env, after_pos) {
+  let n = len(gain_env)
+  if n <= 1 { return edited_total }
+  let seg_len = edited_total / float(n)
+  let i = 0
+  while i < n {
+    let center = int((i + 0.5) * seg_len)
+    if center > after_pos { return center }
+    i = i + 1
+  }
+  return edited_total
+}
+
 fn cmd_voice_edit(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   if len(a["positional"]) < 1 {
-    fail("usage: voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]")
+    fail("usage: voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess] [--autolevel] [--gain-envelope=DB,DB,...]")
   }
   let name = a["positional"][0]
   let p = load_project(path)
@@ -1489,8 +1541,20 @@ fn cmd_voice_edit(a) {
   let do_autotrim = a["flags"].has("autotrim")
   let do_gate = a["flags"].has("gate")
   let do_deess = a["flags"].has("deess")
+  # PLAN8.md "recording isn't consistent on volume" - a real compressor
+  # pass (same self-compression call the per-track mixer strip already
+  # uses, dsp.compressor_process_buffer - not the sidechain-style gate/
+  # de-esser calls above), moderate settings tuned for evening out
+  # spoken/sung dynamic range without obviously squashing the take.
+  let do_autolevel = a["flags"].has("autolevel")
+  let gain_env_str = argmod.flag(a, "gain-envelope", nil)
+  let gain_env = []
+  if gain_env_str != nil and len(gain_env_str) > 0 {
+    for part in gain_env_str.split(",") { gain_env.push(float(part)) }
+  }
+  let do_gain_env = len(gain_env) > 0
 
-  if not (fade_in_s > 0 or fade_out_s > 0 or do_autotrim or do_gate or do_deess) {
+  if not (fade_in_s > 0 or fade_out_s > 0 or do_autotrim or do_gate or do_deess or do_autolevel or do_gain_env) {
     print(name + ": no edits requested, left unchanged")
     return
   }
@@ -1520,6 +1584,12 @@ fn cmd_voice_edit(a) {
   let gate = do_gate ? dsp.gate_new(-45.0, 24.0, 3.0, 120.0, SAMPLE_RATE) : nil
   let deess_bp = do_deess ? dsp.biquad_bandpass_new(7000.0, 2.2, SAMPLE_RATE) : nil
   let deess_comp = do_deess ? dsp.compressor_new(-32.0, 6.0, 2.0, 60.0, SAMPLE_RATE) : nil
+  # -24dB threshold / 4:1 ratio - a real "leveling" ratio (gentler than
+  # the de-esser's 6:1 above, which only needs to tame brief sibilant
+  # peaks, not the whole take's dynamics) with the same 8ms/120ms
+  # attack/release the per-track mixer strip's own compressor uses.
+  let level_comp = do_autolevel ? dsp.compressor_new(-24.0, 4.0, 8.0, 120.0, SAMPLE_RATE) : nil
+  let edited_total_sec = edited_total / float(SAMPLE_RATE)
 
   let fade_in_n = int(fade_in_s * SAMPLE_RATE)
   let fade_out_n = int(fade_out_s * SAMPLE_RATE)
@@ -1544,18 +1614,49 @@ fn cmd_voice_edit(a) {
   p["edit_seq"] = edit_seq
   let out_path = dir_of(path) + "/" + name + "_edit" + str(edit_seq) + ".wav"
   let w = wav.open_write(out_path, SAMPLE_RATE, 1)
-  let n_chunks = ceil_div(edited_total, CHUNK_SAMPLES)
-  let c = 0
-  while c < n_chunks {
-    let start = c * CHUNK_SAMPLES
+  # PLAN8.md: was a fixed c*CHUNK_SAMPLES grid (n_chunks = ceil_div(...))
+  # - switched to a position-tracking loop so a gain-envelope pass can
+  # shrink an individual chunk to stop exactly at a segment-center
+  # breakpoint (see next_gain_env_breakpoint's own comment) without
+  # affecting any of the OTHER edits' fixed CHUNK_SAMPLES sizing, which
+  # never needed anything finer than "whatever this_len is".
+  let start = 0
+  while start < edited_total {
     let this_len = edited_total - start
     if this_len > CHUNK_SAMPLES { this_len = CHUNK_SAMPLES }
+    if do_gain_env {
+      let bp = next_gain_env_breakpoint(edited_total, gain_env, start)
+      if bp > start and bp - start < this_len { this_len = bp - start }
+    }
     let buf = track_read(track, trim_start + start, this_len)
 
     if do_gate { buf = _native_sidechain_process_buffer(gate, buf, buf, 4096, 4.0) }
     if do_deess {
       let band = _native_biquad_process_buffer(deess_bp, buf)
       buf = _native_sidechain_process_buffer(deess_comp, band, buf, 4096, 4.0)
+    }
+    if do_autolevel { buf = dsp.compressor_process_buffer(level_comp, buf) }
+    if do_gain_env {
+      # One native fade-buffer call per chunk (usually a full 10s
+      # CHUNK_SAMPLES chunk, shrunk above only when it would otherwise
+      # cross a segment-center breakpoint), NOT a per-sample interpreted
+      # loop over the whole track - a per-sample version would cost
+      # minutes on an 8-minute take (this file's own "SPEED" note above
+      # measures interpreted per-sample work at ~4,200 samples/sec).
+      # Reusing _native_fade_buffer this way needs zero new native code:
+      # evaluate the envelope at this chunk's own start/end time and hand
+      # the two endpoints to the SAME linear-ramp primitive fade-in/out
+      # already use above - correct because the chunk boundary shrink
+      # above guarantees this chunk never spans a breakpoint, so the true
+      # envelope really is a straight line across it, never an
+      # approximation of a curve.
+      # `start` is already relative to the (post-trim) edited timeline,
+      # same as edited_total_sec above - not the raw track position.
+      let t0 = start / float(SAMPLE_RATE)
+      let t1 = (start + this_len) / float(SAMPLE_RATE)
+      let g0 = dsp.db_to_linear(envelope_db_at(gain_env, edited_total_sec, t0))
+      let g1 = dsp.db_to_linear(envelope_db_at(gain_env, edited_total_sec, t1))
+      buf = _native_fade_buffer(buf, g0, g1)
     }
     if fade_in_n > 0 and start < fade_in_n {
       let seg_len = fade_in_n - start
@@ -1577,7 +1678,7 @@ fn cmd_voice_edit(a) {
     }
 
     wav.write_chunk(w, buf)
-    c = c + 1
+    start = start + this_len
   }
   wav.close_write(w)
 
@@ -1589,7 +1690,8 @@ fn cmd_voice_edit(a) {
   save_project(path, p)
   print(name + ": edited -> " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) +
         "s (trim=" + str(round(trim_start / float(SAMPLE_RATE), 2)) + "s, fade_in=" + str(fade_in_s) +
-        "s, fade_out=" + str(fade_out_s) + "s, gate=" + str(do_gate) + ", deess=" + str(do_deess) + ")")
+        "s, fade_out=" + str(fade_out_s) + "s, gate=" + str(do_gate) + ", deess=" + str(do_deess) +
+        ", autolevel=" + str(do_autolevel) + ", gain_envelope=" + (do_gain_env ? str(gain_env) : "none") + ")")
 }
 
 # A cheap "double"/harmony effect (PLAN3.md Phase G): resample the track
@@ -2474,7 +2576,7 @@ cli.command(app, "beat-render", "synthesize the arrangement (or just 'main') to 
 cli.command(app, "melody-render", "synthesize the bass+chords arrangement to its own track (free): needs 'generate' run first", fn(a) { cmd_melody_render(a) })
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })
 cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME [--auto-gain measures real peak and sets a sane starting level]", fn(a) { cmd_track_import(a) })
-cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
+cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess] [--autolevel] [--gain-envelope=DB,DB,...]", fn(a) { cmd_voice_edit(a) })
 cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] [--resample for the older pitch+tempo-together fallback method]", fn(a) { cmd_double(a) })
 cli.command(app, "autotune", "real pitch correction, in place (free, <=180s clips): autotune NAME --strength=0..1 [--key=SEMITONES-FROM-A4] [--scale=major|minor] - 0=off, low=natural, 1=hard-snap", fn(a) { cmd_autotune(a) })
 cli.command(app, "harmonize", "chord-aware auto-harmony as a new track (free, <=180s clips, needs a chord progression - run 'generate' first): harmonize NAME [--interval=third|fifth] [--gain=DB] [--as=NEWNAME]", fn(a) { cmd_harmonize(a) })

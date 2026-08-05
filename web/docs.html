@@ -184,6 +184,25 @@ footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); fo
     <p>Already have an instrumental — your own or someone else's? Under "Choose your beat," pick a file instead of a genre and it's used as-is for the "Beat" track. Every mixer/EQ/compressor/master control still works on it exactly like a generated beat. No bass/chords layer gets added on top, since this app doesn't know an arbitrary beat's key or chords — only its own generated beats get that.</p>
   </section>
 
+  <section class="entry" id="autolevel">
+    <h2>Auto-level <span class="range">On by default</span></h2>
+    <p class="default">Default: on</p>
+    <p>A recording rarely comes out at one consistent volume the whole way through — a few words often land quieter or louder than the rest just from natural distance-to-mic changes while performing. Auto-level runs a real compressor over your take (evening out anything louder than about -24dB by pulling it back roughly 1dB for every 4dB it's over) as part of "Clean up your vocal," so the loud and quiet parts sit closer together automatically, before you ever touch a slider.</p>
+    <p>This is separate from the manual Compressor sliders in the mixer below — those are for shaping the OVERALL vocal's punch/consistency once it's already been evened out here; Auto-level's job is specifically fixing a recording's own internal inconsistency.</p>
+    <div class="try"><b>Try this:</b> leave it on for almost any recording — it's a gentle, automatic fix, not a heavy effect. If a specific take still has one part that's way off after Auto-level, that's exactly what the volume editor below is for.</div>
+  </section>
+
+  <section class="entry" id="volume-editor">
+    <h2>Even out your vocal's volume (section editor)</h2>
+    <p>Appears once you've recorded at least one take. Splits your take into 8 equal sections, each with its own up/down control (-9 to +9 dB) — turn down a section that came out too loud, turn up one that's too quiet. Press "Preview with these levels" to hear the change instantly, playing against your beat, entirely in your browser — nothing is sent to the server and nothing is charged until you click "Use this arrangement." The same numbers you previewed are exactly what gets applied when you continue, section-center to section-center, smoothly ramped so there's no audible jump between sections.</p>
+    <div class="try"><b>Try this:</b> use this for a specific, known problem (one line came out much quieter than the rest) rather than trying to flatten a naturally expressive performance — Auto-level above already handles the general evening-out; this is for the parts that still stand out after that.</div>
+  </section>
+
+  <section class="entry" id="download-final">
+    <h2>Download your finished track</h2>
+    <p>Once mixing and mastering is done, a "Download your mixed &amp; mastered track" button appears next to your result — it's the exact same file "Your mastered track" plays back, saved to your device. Individual track stems (beat, vocal, and any extras like a harmony layer) remain available to download separately just below it, for remixing elsewhere.</p>
+  </section>
+
   <section class="entry">
     <h2>Why this works this way</h2>
     <p>Every one of these controls maps directly to a parameter in a real, from-scratch signal-processing program written in Larzscript — a 3-band EQ (Warmth/Clarity/Air), a linked stereo compressor (Punch), and a brickwall limiter (Loudness), the same building blocks real mastering engineers and plugins use. There's no AI guessing, no hidden preset — moving a slider and hitting "Apply" re-runs that exact math on your actual recording, streamed through in small chunks so an 8-minute take renders in about the same time as a 30-second one.</p>

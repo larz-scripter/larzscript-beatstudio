@@ -103,6 +103,12 @@ MAX_TAKES = 40
 TRIM_RANGE = (0.0, 600.0)
 GAP_RANGE = (0.0, 30.0)
 FADE_RANGE = (0.0, 10.0)
+# PLAN8.md volume editor: matches the client's 8-segment panel + slider
+# range (-9..9dB) - generous vs the panel's own exposed range on purpose,
+# same "wider than the UI slider" convention GAIN_RANGE above already
+# uses, not an invitation to send something the UI never offers.
+GAIN_ENVELOPE_MAX_SEGMENTS = 16
+GAIN_ENVELOPE_RANGE = (-18.0, 18.0)
 
 
 def clamp(v, lo, hi):
@@ -280,12 +286,28 @@ def normalize_manifest(raw):
     autotune_scale = fx_in.get("autotuneScale")
     if autotune_scale not in AUTOTUNE_SCALES:
         autotune_scale = None
+    # PLAN8.md "recording isn't consistent on volume" + "let me adjust
+    # sections and hear it before applying": gainEnvelope is a list of
+    # per-section dB nudges a visitor set in the client-side volume
+    # editor (already previewed there via Web Audio before ever hitting
+    # this endpoint) - clamp each value and cap the list length so a
+    # malformed/huge array can't blow up the voice-edit command line.
+    gain_envelope_in = fx_in.get("gainEnvelope", [])
+    gain_envelope = []
+    if isinstance(gain_envelope_in, list):
+        for v in gain_envelope_in[:GAIN_ENVELOPE_MAX_SEGMENTS]:
+            try:
+                gain_envelope.append(clamp(float(v), *GAIN_ENVELOPE_RANGE))
+            except (TypeError, ValueError):
+                gain_envelope.append(0.0)
     fx = {
         "fadeIn": clamp(fx_in.get("fadeIn", 0.0), *FADE_RANGE),
         "fadeOut": clamp(fx_in.get("fadeOut", 0.0), *FADE_RANGE),
         "autotrim": bool(fx_in.get("autotrim", False)),
         "gate": bool(fx_in.get("gate", False)),
         "deess": bool(fx_in.get("deess", False)),
+        "autolevel": bool(fx_in.get("autolevel", False)),
+        "gainEnvelope": gain_envelope,
         "autotuneStrength": clamp(fx_in.get("autotuneStrength", 0.0), *AUTOTUNE_STRENGTH_RANGE),
         "autotuneKey": clamp(fx_in.get("autotuneKey", 0.0), *AUTOTUNE_KEY_RANGE),
         "autotuneScale": autotune_scale,

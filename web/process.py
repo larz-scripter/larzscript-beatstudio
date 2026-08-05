@@ -9,8 +9,9 @@ Job types, distinguished by session status:
                            workspace manifest.json is present) or decode the
                            legacy single upload -> (first time only) init
                            project + generate the beat -> track-import vocal
-                           -> voice-edit (fade/autotrim/gate/de-ess, if
-                           requested) -> autotune/double/harmonize (if
+                           -> voice-edit (fade/autotrim/gate/de-ess/
+                           autolevel/gain-envelope, if requested -
+                           PLAN8.md) -> autotune/double/harmonize (if
                            requested) -> mix (default levels) -> preview.
                            Stops at "preview_ready" - NO master, nothing
                            charged yet. A visitor lands back here from
@@ -739,7 +740,9 @@ def process_uploaded(session_id, d):
         write_status(d, "error", message="couldn't add your recording as a track", detail=p.stdout[-800:])
         return
 
-    if fx and (fx["fadeIn"] > 0 or fx["fadeOut"] > 0 or fx["autotrim"] or fx["gate"] or fx["deess"]):
+    gain_envelope = fx.get("gainEnvelope", []) if fx else []
+    if fx and (fx["fadeIn"] > 0 or fx["fadeOut"] > 0 or fx["autotrim"] or fx["gate"] or fx["deess"] or
+               fx.get("autolevel") or gain_envelope):
         write_status(d, "processing", stage="Cleaning up your vocal...")
         edit_flags = ["--fade-in=" + str(fx["fadeIn"]), "--fade-out=" + str(fx["fadeOut"])]
         if fx["autotrim"]:
@@ -748,6 +751,10 @@ def process_uploaded(session_id, d):
             edit_flags.append("--gate")
         if fx["deess"]:
             edit_flags.append("--deess")
+        if fx.get("autolevel"):
+            edit_flags.append("--autolevel")
+        if gain_envelope:
+            edit_flags.append("--gain-envelope=" + ",".join(str(v) for v in gain_envelope))
         p = run(BEATSTUDIO + ["voice-edit", "vocal"] + edit_flags + ["--file=" + project], timeout=300)
         if p.returncode != 0:
             write_status(d, "error", message="voice editing failed", detail=p.stdout[-800:])

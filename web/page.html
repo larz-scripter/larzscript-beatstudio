@@ -286,9 +286,22 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <button class="btn-primary" id="use-arrangement-btn">Use this arrangement</button>
       </div>
 
+      <div class="section-label" id="voleditor-label" style="display:none">Even out your vocal's volume</div>
+      <div class="mix-panel" id="voleditor-panel" style="display:none">
+        <p class="sub" style="margin:0 0 4px">Some parts of a take often come out quieter or louder than the rest. Nudge any section up or down, then press Preview to hear the change instantly against your beat — nothing renders on the server until you click "Use this arrangement" below.</p>
+        <p class="sub" id="voleditor-total" style="margin:0 0 14px"></p>
+        <div id="voleditor-segments"></div>
+        <div class="mixer-actions" style="margin-top:6px">
+          <button class="btn-ghost" id="voleditor-preview-btn">&#9654; Preview with these levels</button>
+          <button class="btn-ghost" id="voleditor-stop-btn" style="display:none">&#9632; Stop preview</button>
+          <button class="btn-ghost" id="voleditor-reset-btn">Reset to flat</button>
+        </div>
+      </div>
+
       <div class="section-label" id="vocalfx-label" style="display:none">Clean up your vocal</div>
       <div class="mix-panel" id="vocalfx-panel" style="display:none">
         <label class="fx-toggle"><input type="checkbox" id="fx-autotrim" checked> Auto-trim leading silence <span class="hint">— trims dead air before you start talking/singing</span></label>
+        <label class="fx-toggle"><input type="checkbox" id="fx-autolevel" checked> Auto-level <span class="hint">— evens out parts that came out quieter or louder than the rest, automatically</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-gate"> Noise gate <span class="hint">— quiets room noise between phrases</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-deess"> De-esser <span class="hint">— tames harsh "S"/"T" sounds</span></label>
         <label class="fx-toggle"><input type="checkbox" id="fx-double"> Quick double <span class="hint">— layers a copy for thickness/harmony. Pitch shifted, timing preserved.</span></label>
@@ -351,6 +364,9 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
         <div class="mixer-actions" id="preview-actions" style="display:none">
           <button class="btn-ghost" id="retake-btn">&#128257; Retake or add more</button>
           <button class="btn-primary" id="finalize-btn">&#10003; Sounds good — Mix &amp; master ($2)</button>
+        </div>
+        <div class="mixer-actions" id="final-download-row" style="display:none; margin-top:14px">
+          <a class="btn-primary" id="final-download-link" download>&#8681; Download your mixed &amp; mastered track</a>
         </div>
         <div id="stems-box" style="display:none; margin-top:14px">
           <div class="section-label" style="margin:0 0 8px">Download stems</div>
@@ -808,6 +824,122 @@ const MAX_SECONDS = 480; // verified safe on the production box up to 8 minutes 
 
 let takes = []; // {blob, url, duration, trimStart, trimEnd, gapBefore}
 
+// PLAN8.md "let me adjust sections and hear it before applying" - an
+// 8-section gain envelope the visitor can preview entirely client-side
+// (Web Audio gain automation, no server round-trip) before ever hitting
+// "Use this arrangement". The SAME dB values, in the SAME order, are
+// what beatstudio.lz's voice-edit --gain-envelope applies server-side
+// (see its own envelope_db_at comment) - segment-CENTER-to-center linear
+// ramps on both sides, so what's previewed here is what actually renders.
+const N_VOL_SEGMENTS = 8;
+let volEnvelope = new Array(N_VOL_SEGMENTS).fill(0);
+const volEditorLabel = document.getElementById("voleditor-label");
+const volEditorPanel = document.getElementById("voleditor-panel");
+const volEditorSegments = document.getElementById("voleditor-segments");
+const volEditorTotal = document.getElementById("voleditor-total");
+
+function dbToLinear(db){ return Math.pow(10, Number(db) / 20); }
+function fmtVolDb(v){ const n = Number(v); return n === 0 ? "0 dB" : (n > 0 ? "+" : "") + n + " dB"; }
+
+// Mirrors exactly what the "preview full arrangement"/assemble pipeline
+// already computes from takes (gap + trimmed duration, summed) - the
+// same real duration the server will see once assembled.
+function arrangementDurationSec(){
+  let total = 0;
+  for (const t of takes) total += t.gapBefore + Math.max(0.01, t.trimEnd - t.trimStart);
+  return total;
+}
+
+function renderVolEditor(){
+  const has = takes.length > 0;
+  volEditorLabel.style.display = has ? "" : "none";
+  volEditorPanel.style.display = has ? "" : "none";
+  if (!has) return;
+  volEditorTotal.textContent = "Current length: ~" + fmtTime(arrangementDurationSec()) +
+    " across " + N_VOL_SEGMENTS + " equal sections below.";
+  volEditorSegments.innerHTML = "";
+  volEnvelope.forEach((db, i) => {
+    const row = document.createElement("div");
+    row.className = "ctrl-row";
+    row.innerHTML =
+      '<label>Section ' + (i + 1) + '</label>' +
+      '<input type="range" min="-9" max="9" step="1" value="' + db + '">' +
+      '<span class="val">' + fmtVolDb(db) + '</span>';
+    const input = row.querySelector("input");
+    const valEl = row.querySelector(".val");
+    input.addEventListener("input", () => {
+      volEnvelope[i] = Number(input.value);
+      valEl.textContent = fmtVolDb(volEnvelope[i]);
+    });
+    volEditorSegments.appendChild(row);
+  });
+}
+
+document.getElementById("voleditor-reset-btn").addEventListener("click", () => {
+  volEnvelope = volEnvelope.map(() => 0);
+  renderVolEditor();
+});
+
+// Schedules every take exactly like "Preview full arrangement" below,
+// but routed through one master GainNode with automation matching the
+// section sliders above, PLUS the generated beat playing alongside for
+// real context (the same gapless loop the recording flow itself uses -
+// see startGaplessLoop's own comment on why native <audio>.loop isn't
+// used for this). Nothing is sent to the server here - purely local
+// Web Audio playback, so a visitor can iterate on levels for free before
+// ever calling /api/assemble.
+let volPreviewCtx = null;
+let volPreviewTimeout = null;
+function stopVolumePreview(){
+  if (volPreviewCtx) { try { volPreviewCtx.close(); } catch (e) {} volPreviewCtx = null; }
+  stopGaplessLoop();
+  if (volPreviewTimeout) { clearTimeout(volPreviewTimeout); volPreviewTimeout = null; }
+  document.getElementById("voleditor-preview-btn").style.display = "";
+  document.getElementById("voleditor-stop-btn").style.display = "none";
+}
+document.getElementById("voleditor-stop-btn").addEventListener("click", stopVolumePreview);
+document.getElementById("voleditor-preview-btn").addEventListener("click", async () => {
+  if (takes.length === 0) return;
+  stopVolumePreview();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  volPreviewCtx = ctx;
+  const vocalGain = ctx.createGain();
+  vocalGain.connect(ctx.destination);
+
+  const startOffset = ctx.currentTime + 0.15;
+  let t = startOffset;
+  for (const take of takes) {
+    const buf = await ctx.decodeAudioData(await take.blob.arrayBuffer());
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(vocalGain);
+    const dur = Math.max(0.01, take.trimEnd - take.trimStart);
+    t += take.gapBefore;
+    src.start(t, take.trimStart, dur);
+    t += dur;
+  }
+  const totalDur = arrangementDurationSec();
+
+  // Same shape as envelope_db_at server-side: flat at env[0] before the
+  // first section's center, a linear ramp center-to-center through the
+  // middle, flat at env[N-1] after the last center (linearRamp's own
+  // "hold the last scheduled value" behavior gives that last part for
+  // free - no extra automation call needed).
+  const segSec = totalDur / N_VOL_SEGMENTS;
+  vocalGain.gain.setValueAtTime(dbToLinear(volEnvelope[0]), startOffset);
+  for (let i = 0; i < N_VOL_SEGMENTS; i++) {
+    vocalGain.gain.linearRampToValueAtTime(dbToLinear(volEnvelope[i]), startOffset + (i + 0.5) * segSec);
+  }
+
+  if (beatReady && beatgenDeck) {
+    const beatUrl = beatgenDeck.audio.currentSrc || beatgenDeck.audio.src;
+    startGaplessLoop(beatUrl);
+  }
+  document.getElementById("voleditor-preview-btn").style.display = "none";
+  document.getElementById("voleditor-stop-btn").style.display = "";
+  volPreviewTimeout = setTimeout(stopVolumePreview, (totalDur + 0.3) * 1000);
+});
+
 // PLAN7.md fix: a plain <audio>.loop=true restart is NOT sample-accurate
 // in any browser - it re-triggers via an internal seek/rebuffer, which
 // leaves an audible click or micro-gap at every loop boundary. That's
@@ -1080,6 +1212,7 @@ function renderTakes(){
   workspaceActions.style.display = has ? "" : "none";
   vocalfxLabel.style.display = has ? "" : "none";
   vocalfxPanel.style.display = has ? "" : "none";
+  renderVolEditor();
 }
 
 // Plays the whole arrangement (trims + gaps) entirely client-side via the
@@ -1110,6 +1243,7 @@ function collectFx(){
     fadeIn: Number(document.getElementById("fx-fadein").value),
     fadeOut: Number(document.getElementById("fx-fadeout").value),
     autotrim: document.getElementById("fx-autotrim").checked,
+    autolevel: document.getElementById("fx-autolevel").checked,
     gate: document.getElementById("fx-gate").checked,
     deess: document.getElementById("fx-deess").checked,
     double: document.getElementById("fx-double").checked,
@@ -1119,6 +1253,7 @@ function collectFx(){
     autotuneStrength: Number(document.getElementById("fx-autotune").value),
     autotuneKey: Number(document.getElementById("fx-autotune-key").value),
     autotuneScale: scale || null,
+    gainEnvelope: volEnvelope.slice(),
   };
 }
 wireSlider(document.getElementById("fx-fadein"), v => Number(v).toFixed(2) + "s");
@@ -1235,6 +1370,7 @@ function pollStatus(isRerender){
       mixerBox.classList.remove("on");
       document.querySelector("#deck-result .toggle-row").style.display = "none";
       document.getElementById("stems-box").style.display = "none";
+      document.getElementById("final-download-row").style.display = "none";
       const previewData = {
         before: { url: data.preview_url + "?v=" + Date.now(), peak: -3.0 },
         after:  { url: data.preview_url + "?v=" + Date.now(), peak: -3.0 },
@@ -1262,6 +1398,11 @@ function pollStatus(isRerender){
       };
       if (!resultDeck) { resultDeck = makeDeck("result", resultData); attachPlaybackMeter(resultDeck.audio, "#result-meter"); }
       else resultDeck.setData(resultData);
+      // PLAN8.md "download the completed mixed and mastered product" -
+      // after_url IS that real final master (same file "Your mastered
+      // track" above plays); a plain download link is all this needs.
+      document.getElementById("final-download-link").href = data.after_url;
+      document.getElementById("final-download-row").style.display = "";
       renderStems(data.stems);
       if (isRerender) {
         setMixerStatus("Updated — listen to “Your mastered track” above.", "ok");
