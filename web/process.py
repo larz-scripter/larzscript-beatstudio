@@ -54,7 +54,7 @@ DEFAULT_PARAMS = {
         "melody": {"gain": -6.0, "pan": 0.0, "mute": False, "strip": DEFAULT_STRIP},
     },
     "master": {"preset": None, "low": 2.0, "mid": 0.5, "high": 3.0, "thresh": -14.0, "ratio": 3.0,
-               "ceiling": -1.0, "width": 1.0, "saturation": 0.0},
+               "ceiling": -1.0, "width": 1.0, "saturation": 0.0, "targetLufs": None},
 }
 
 # The full set of track names this pipeline knows about - not every
@@ -249,6 +249,7 @@ def apply_mix(project, params, log_prefix, d):
 
 
 def render_preview_and_master(project, params, d, is_first_master):
+    write_status(d, "processing", stage="Mixing your preview...")
     p = run(BEATSTUDIO + ["preview", "--file=" + project], timeout=300)
     if p.returncode != 0:
         write_status(d, "error", message="preview mix failed", detail=p.stdout[-800:])
@@ -264,10 +265,17 @@ def render_preview_and_master(project, params, d, is_first_master):
     master_flags += ["--low=" + str(m["low"]), "--mid=" + str(m["mid"]), "--high=" + str(m["high"]),
                       "--thresh=" + str(m["thresh"]), "--ratio=" + str(m["ratio"]), "--ceiling=" + str(m["ceiling"]),
                       "--width=" + str(m.get("width", 1.0)), "--saturation=" + str(m.get("saturation", 0.0))]
+    # PLAN5.md Phase N - only sent when a target was actually picked, so
+    # a project that never asks for it doesn't pay the measurement
+    # pre-pass beatstudio.lz's own --target-lufs implementation costs.
+    if m.get("targetLufs"):
+        master_flags.append("--target-lufs=" + str(m["targetLufs"]))
     if is_first_master:
         cmd = BEATSTUDIO + ["master", "--price=" + MASTER_PRICE] + master_flags + ["--file=" + project]
+        write_status(d, "processing", stage="Mastering your track...")
     else:
         cmd = BEATSTUDIO + ["remaster"] + master_flags + ["--file=" + project]
+        write_status(d, "processing", stage="Re-mastering with your new settings...")
     # A real full-chain render (5+ minutes of audio through native EQ/
     # compressor/limiter) measured ~30-50s on this box at 5-8 minutes -
     # generous on purpose, the same lesson the original timeout already
@@ -293,6 +301,27 @@ def publish_results(project, d, session_id):
     shutil.copyfile(last_master_path, os.path.join(out_dir, "after.wav"))
     os.chmod(os.path.join(out_dir, "before.wav"), 0o644)
     os.chmod(os.path.join(out_dir, "after.wav"), 0o644)
+
+    # PLAN5.md Phase O - real stem export: every track that actually got
+    # rendered onto this project (beat/vocal/melody plus any layered
+    # extras like vocal_double/vocal_harmony), published individually so
+    # a visitor can pull the separated parts for remixing elsewhere, not
+    # just the final 2-track mix. Best-effort per file - one missing/
+    # unreadable track file shouldn't take down the whole "done" result,
+    # since the mix/master already succeeded without needing it re-read.
+    stems = {}
+    for t in proj.get("tracks", []):
+        src = t.get("path")
+        if not src or not os.path.exists(src):
+            continue
+        stem_name = "stem_" + t["name"] + ".wav"
+        try:
+            shutil.copyfile(src, os.path.join(out_dir, stem_name))
+            os.chmod(os.path.join(out_dir, stem_name), 0o644)
+            stems[t["name"]] = "/beatstudio/results/" + session_id + "/" + stem_name
+        except OSError:
+            pass
+
     # Real track presence, not the beat.json request flag - the source of
     # truth the mixer UI needs for "should the Melody panel be shown at
     # all" is whatever actually got rendered onto this project, not what
@@ -300,7 +329,8 @@ def publish_results(project, d, session_id):
     track_names = set(t["name"] for t in proj.get("tracks", []))
     write_status(d, "done", before_url="/beatstudio/results/" + session_id + "/before.wav",
                  after_url="/beatstudio/results/" + session_id + "/after.wav",
-                 peak_dbfs=masters[-1]["peak_dbfs"], melody="melody" in track_names)
+                 peak_dbfs=masters[-1]["peak_dbfs"], melody="melody" in track_names,
+                 lufs=masters[-1].get("lufs"), stems=stems)
 
 
 def process_beat_requested(session_id, d):
@@ -357,7 +387,7 @@ def process_uploaded(session_id, d):
     with open(status_path) as f:
         raw_ext = json.load(f).get("raw_ext", "webm")
 
-    write_status(d, "processing")
+    write_status(d, "processing", stage="Getting started...")
 
     vocal_wav = os.path.join(d, "vocal_upload.wav")
     manifest_path = os.path.join(d, "manifest.json")
@@ -366,6 +396,7 @@ def process_uploaded(session_id, d):
         with open(manifest_path) as f:
             manifest = json.load(f)
         fx = manifest["fx"]
+        write_status(d, "processing", stage="Assembling your takes...")
         err = assemble_takes(d, manifest, vocal_wav, "assemble")
         if err:
             write_status(d, "error", message="couldn't assemble your takes", detail=err)
@@ -391,28 +422,33 @@ def process_uploaded(session_id, d):
         write_status(d, "error", message="init failed", detail=p.stdout[-800:])
         return
 
+    write_status(d, "processing", stage="Generating your beat...")
     p = generate_beat(project, beat)
     if p.returncode != 0:
         write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
         return
 
+    write_status(d, "processing", stage="Rendering the beat...")
     p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
     if p.returncode != 0:
         write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
         return
 
     if beat.get("melody", True):
+        write_status(d, "processing", stage="Rendering bass & chords...")
         p = melody_render(project)
         if p.returncode != 0:
             write_status(d, "error", message="melody render failed", detail=p.stdout[-800:])
             return
 
+    write_status(d, "processing", stage="Adding your recording...")
     p = run(BEATSTUDIO + ["track-import", vocal_wav, "--name=vocal", "--file=" + project], timeout=300)
     if p.returncode != 0:
         write_status(d, "error", message="couldn't add your recording as a track", detail=p.stdout[-800:])
         return
 
     if fx and (fx["fadeIn"] > 0 or fx["fadeOut"] > 0 or fx["autotrim"] or fx["gate"] or fx["deess"]):
+        write_status(d, "processing", stage="Cleaning up your vocal...")
         edit_flags = ["--fade-in=" + str(fx["fadeIn"]), "--fade-out=" + str(fx["fadeOut"])]
         if fx["autotrim"]:
             edit_flags.append("--autotrim")
@@ -426,13 +462,14 @@ def process_uploaded(session_id, d):
             return
 
     # PLAN4.md Phase J real pitch correction - runs on the CLEANED vocal
-    # (after voice-edit above), and BEFORE double below so a harmony
-    # layer is built from the already-corrected pitch, not the raw one.
-    # strength=0 (default) is a true no-op on the beatstudio.lz side, so
-    # this call is always safe to make unconditionally when a manifest
-    # exists - matches apply_strip's own "always send, let the engine
-    # no-op" convention above.
+    # (after voice-edit above), and BEFORE double/harmonize below so a
+    # harmony layer is built from the already-corrected pitch, not the
+    # raw one. strength=0 (default) is a true no-op on the beatstudio.lz
+    # side, so this call is always safe to make unconditionally when a
+    # manifest exists - matches apply_strip's own "always send, let the
+    # engine no-op" convention above.
     if fx and fx.get("autotuneStrength", 0.0) > 0.0:
+        write_status(d, "processing", stage="Correcting pitch...")
         at_flags = ["--strength=" + str(fx["autotuneStrength"]), "--key=" + str(fx.get("autotuneKey", 0.0))]
         if fx.get("autotuneScale"):
             at_flags.append("--scale=" + fx["autotuneScale"])
@@ -445,17 +482,32 @@ def process_uploaded(session_id, d):
     # possibly pitch-corrected) vocal, so the doubled layer gets the same
     # benefit the main vocal does rather than doubling the raw recording.
     if fx and fx.get("double"):
+        write_status(d, "processing", stage="Adding a double...")
         p = run(BEATSTUDIO + ["double", "vocal", "--semitones=" + str(fx.get("doubleSemitones", 0.15)),
                                "--file=" + project], timeout=180)
         if p.returncode != 0:
             write_status(d, "error", message="couldn't create the vocal double", detail=p.stdout[-800:])
             return
 
+    # PLAN5.md Phase M chord-aware harmony - a separate, optional layer
+    # from `double` above (a visitor could conceivably want both: a
+    # subtle double AND a real harmony line). Same "run after pitch
+    # correction" ordering reasoning.
+    if fx and fx.get("harmonize"):
+        write_status(d, "processing", stage="Adding harmony...")
+        p = run(BEATSTUDIO + ["harmonize", "vocal", "--interval=" + fx.get("harmonizeInterval", "third"),
+                               "--file=" + project], timeout=180)
+        if p.returncode != 0:
+            write_status(d, "error", message="couldn't create the harmony - does this project have a chord progression? (drums-only beats can't harmonize)", detail=p.stdout[-800:])
+            return
+
     params = DEFAULT_PARAMS
+    write_status(d, "processing", stage="Setting mix levels...")
     if apply_mix(project, params, "initial mix", d) is not None:
         return
     if not render_preview_and_master(project, params, d, is_first_master=True):
         return
+    write_status(d, "processing", stage="Finishing up...")
     publish_results(project, d, session_id)
 
 
@@ -464,12 +516,13 @@ def process_rerender(session_id, d):
     if not os.path.exists(project):
         write_status(d, "error", message="no project to remix - record something first")
         return
-    write_status(d, "processing")
+    write_status(d, "processing", stage="Applying your changes...")
     params = load_params(d)
     if apply_mix(project, params, "remix", d) is not None:
         return
     if not render_preview_and_master(project, params, d, is_first_master=False):
         return
+    write_status(d, "processing", stage="Finishing up...")
     publish_results(project, d, session_id)
 
 

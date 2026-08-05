@@ -59,6 +59,9 @@ REVERB_FEEDBACK_RANGE = (0.0, 0.85)
 AUTOTUNE_STRENGTH_RANGE = (0.0, 1.0)
 AUTOTUNE_KEY_RANGE = (-24.0, 24.0)
 AUTOTUNE_SCALES = ("major", "minor")
+# PLAN5.md Phase M/N ranges.
+HARMONY_INTERVALS = ("third", "fifth")
+TARGET_LUFS_RANGE = (-40.0, -6.0)
 
 # Mirrors beatstudio.lz's own GENRES list - kept in sync by hand (small,
 # rarely-changing list; not worth a shared-file mechanism for six names).
@@ -164,6 +167,9 @@ def normalize_params(raw):
     preset = m.get("preset")
     if preset not in MASTER_PRESETS:
         preset = None
+    target_lufs = m.get("targetLufs")
+    if target_lufs is not None:
+        target_lufs = clamp(target_lufs, *TARGET_LUFS_RANGE)
     master = {
         "preset": preset,
         "low": clamp(m.get("low", 1.5), *EQ_RANGE),
@@ -174,6 +180,10 @@ def normalize_params(raw):
         "ceiling": clamp(m.get("ceiling", -1.0), *CEILING_RANGE),
         "width": clamp(m.get("width", 1.0), *WIDTH_RANGE),
         "saturation": clamp(m.get("saturation", 0.0), *SATURATION_RANGE),
+        # PLAN5.md Phase N - None (default) means no target at all, not
+        # "target 0 LUFS" - the manual ceiling/ratio sliders stay the
+        # only loudness controls unless a visitor explicitly picks one.
+        "targetLufs": target_lufs,
     }
     return {"tracks": tracks, "master": master}
 
@@ -259,6 +269,11 @@ def normalize_manifest(raw):
         # explicit --resample fallback path.
         "double": bool(fx_in.get("double", False)),
         "doubleSemitones": double_semitones,
+        # PLAN5.md Phase M - a separate real chord-aware harmony layer
+        # (distinct from the fixed-interval double above), fails closed on
+        # the beatstudio.lz side if the project has no chord progression.
+        "harmonize": bool(fx_in.get("harmonize", False)),
+        "harmonizeInterval": fx_in.get("harmonizeInterval") if fx_in.get("harmonizeInterval") in HARMONY_INTERVALS else "third",
     }
     return {"takes": takes, "fx": fx}
 
