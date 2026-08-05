@@ -12,6 +12,15 @@ re-import).
 Recording workspace (PLAN2.md Phase B/C) endpoints:
   POST /api/beat?session=X    {genre, bpm, bars} -> a free beat-only
                                preview render, before anything is recorded.
+  POST /api/beat-upload?session=X   raw audio file body (like /api/take) ->
+                               PLAN7.md "upload your own beat": uses that
+                               file AS the beat track instead of generating
+                               one (no melody layered under it - we don't
+                               know its key/chords). Lands on the same
+                               "beat_requested"/"beat_ready" states as
+                               /api/beat, so the rest of the page (preview,
+                               record, mix, master) doesn't need to know
+                               which path a project's beat came from.
   POST /api/take?session=X&index=N   one raw take clip (record in bits).
   POST /api/assemble?session=X       {takes:[...], fx:{...}} -> kicks off
                                the free mix-only pipeline /api/upload used
@@ -29,6 +38,7 @@ Recording workspace (PLAN2.md Phase B/C) endpoints:
                                time only) mix+master step and lands on
                                "done". PLAN6.md Phase Q.
 """
+import glob
 import json
 import os
 import re
@@ -335,6 +345,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_take()
         if self.path.startswith("/api/assemble"):
             return self._handle_assemble()
+        if self.path.startswith("/api/beat-upload"):
+            return self._handle_beat_upload()
         if self.path.startswith("/api/beat"):
             return self._handle_beat()
         if self.path.startswith("/api/params"):
@@ -479,6 +491,47 @@ class Handler(BaseHTTPRequestHandler):
 
         d = session_dir(session_id)
         os.makedirs(d, exist_ok=True)
+        tmp = os.path.join(d, "beat.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(beat, f)
+        os.replace(tmp, os.path.join(d, "beat.json"))
+
+        write_status(session_id, "beat_requested")
+        self._json(200, {"status": "beat_requested"})
+
+    def _handle_beat_upload(self):
+        """PLAN7.md 'upload your own beat' - a visitor who already has an
+        instrumental can record over IT instead of picking a genre.
+        Mirrors _handle_beat's shape (writes beat.json, flips to
+        "beat_requested" so the SAME process.py job type/poll loop the
+        genre-picker already uses picks it up) but the body is a raw
+        audio file like _handle_take, not a JSON beat spec."""
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        qparams = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        session_id = qparams.get("session", "")
+        if not SESSION_RE.match(session_id):
+            return self._json(400, {"error": "bad session id"})
+
+        if current_status(session_id) == "processing":
+            return self._json(409, {"error": "still processing - try again in a few seconds"})
+
+        content_type = self.headers.get("Content-Type", "audio/webm").split(";")[0].strip()
+        ext = EXT_BY_TYPE.get(content_type, "webm")
+        d = session_dir(session_id)
+        os.makedirs(d, exist_ok=True)
+        # Only one uploaded beat per session makes sense (it replaces
+        # whatever beat this session was using) - clear any stale one
+        # from a prior attempt/format first so find_beat_upload_file()
+        # over on the process.py side can never see two candidates.
+        for old in glob.glob(os.path.join(d, "beat_upload_raw.*")):
+            os.remove(old)
+        raw_path = os.path.join(d, "beat_upload_raw." + ext)
+        n = self._read_body_to_file(raw_path, 25 * 1024 * 1024)
+        if n is None:
+            return self._json(400, {"error": "bad content length (max 25MB)"})
+
+        beat = {"genre": "custom", "bpm": 0, "bars": 0, "seed": 0, "melody": False,
+                "targetSeconds": 0, "customUpload": True}
         tmp = os.path.join(d, "beat.json.tmp")
         with open(tmp, "w") as f:
             json.dump(beat, f)

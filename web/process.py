@@ -36,9 +36,11 @@ All drop results where Apache serves them as static files.
 import copy
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -49,12 +51,62 @@ RESULTS_DIR = "/var/www/larzos/beatstudio/results"
 BEATSTUDIO = ["larzscript", os.path.join(APP_DIR, "beatstudio.lz")]
 LOCK_PATH = "/opt/beatstudio/.process.lock"
 
+# PLAN7.md uniqueness fix - belt-and-suspenders on top of beatstudio.lz's
+# own real per-genre variety pools (drum-skeleton variant, chord
+# progression, key - see genre_progressions()/genre_keys()/gen_main() in
+# beatstudio.lz). That fixed the ROOT CAUSE of "regenerating sounds like
+# the same track" (the skeleton/progression/key used to be 100% fixed per
+# genre, only hi-hat density was ever seed-driven). This ledger is the
+# hard guarantee on top: track which {genre, bpm, variant, progression,
+# key, melody, length} combinations - the audible MUSICAL IDENTITY, not
+# the exact seed/audio - have been handed out recently, and force a
+# reroll (via a deterministically-bumped seed) if the same combination
+# would repeat within the window, rather than trusting probability alone.
+FINGERPRINT_DB = os.path.join(SESSIONS_DIR, "fingerprints.db")
+FINGERPRINT_RECENT_SECONDS = 6 * 3600
+MAX_UNIQUENESS_ATTEMPTS = 8
+
+
+def _fingerprint_conn():
+    conn = sqlite3.connect(FINGERPRINT_DB, timeout=5)
+    conn.execute("CREATE TABLE IF NOT EXISTS generations (fingerprint TEXT PRIMARY KEY, last_seen REAL)")
+    return conn
+
+
+def _project_fingerprint(project):
+    """The audible musical identity of a generated project - deliberately
+    NOT the seed or the raw audio (two seeds can land on the identical
+    variant/progression/key by chance and that's fine, still the same
+    perceived identity; conversely two DIFFERENT identities should never
+    collide just because of an unrelated seed difference)."""
+    with open(project) as f:
+        p = json.load(f)
+    parts = [p.get("genre"), p.get("bpm"), p.get("variant"), p.get("progression_variant"),
+             p.get("key_root_semitone"), p.get("melody_enabled"), len(p.get("arrangement", []))]
+    raw = "|".join(str(x) for x in parts)
+    return hashlib.sha1(raw.encode()).hexdigest()
+
+
+def _fingerprint_is_recent(conn, fp):
+    row = conn.execute("SELECT last_seen FROM generations WHERE fingerprint=?", (fp,)).fetchone()
+    return row is not None and (time.time() - row[0]) < FINGERPRINT_RECENT_SECONDS
+
+
+def _record_fingerprint(conn, fp):
+    # INSERT OR REPLACE rather than an ON CONFLICT upsert - simpler (only
+    # 2 columns, both always overwritten) and works on older sqlite3
+    # builds too (ON CONFLICT...DO UPDATE needs sqlite >= 3.24, and this
+    # runs inside whatever Python ships on the box, not a pinned version).
+    conn.execute("INSERT OR REPLACE INTO generations (fingerprint, last_seen) VALUES (?, ?)", (fp, time.time()))
+    conn.commit()
+
 # Used whenever a session has no beat.json (e.g. an old client, or a
 # visitor who hits record before ever calling /api/beat) - a fixed,
 # always-available fallback rather than a hard failure. bars=4 matches
 # the arrangement length ("intro*2,main*4,fill,main*2,outro") the
 # original hand-authored demo beat used.
-DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1, "melody": True, "targetSeconds": 0}
+DEFAULT_BEAT = {"genre": "boombap", "bpm": 140.0, "bars": 4, "seed": 1, "melody": True, "targetSeconds": 0,
+                "customUpload": False}
 
 DEFAULT_STRIP = {"eqLow": 0.0, "eqMid": 0.0, "eqHigh": 0.0, "compThresh": 0.0, "compRatio": 3.0,
                   "duckFrom": None, "delayMs": 0.0, "delayFeedback": 0.3, "delayMix": 0.0,
@@ -150,7 +202,8 @@ def load_beat(d):
         return {"genre": b.get("genre", DEFAULT_BEAT["genre"]), "bpm": b.get("bpm", DEFAULT_BEAT["bpm"]),
                 "bars": b.get("bars", DEFAULT_BEAT["bars"]), "seed": b.get("seed", DEFAULT_BEAT["seed"]),
                 "melody": b.get("melody", DEFAULT_BEAT["melody"]),
-                "targetSeconds": b.get("targetSeconds", DEFAULT_BEAT["targetSeconds"])}
+                "targetSeconds": b.get("targetSeconds", DEFAULT_BEAT["targetSeconds"]),
+                "customUpload": b.get("customUpload", DEFAULT_BEAT["customUpload"])}
     except (json.JSONDecodeError, OSError):
         return DEFAULT_BEAT
 
@@ -167,6 +220,38 @@ def generate_beat(project, beat, timeout=180):
     if beat.get("targetSeconds", 0) > 0:
         cmd.append("--target-seconds=" + str(beat["targetSeconds"]))
     return run(cmd, timeout=timeout)
+
+
+def find_beat_upload_file(d):
+    for path in glob.glob(os.path.join(d, "beat_upload_raw.*")):
+        return path
+    return None
+
+
+# PLAN7.md "upload your own beat" feature: a visitor who already has an
+# instrumental (their own or someone else's) can record vocals over IT
+# instead of an auto-generated one. `track-import` already calls
+# beatstudio.lz's own decode_to_wav (ffmpeg, any container/codec ffmpeg
+# can read - see its own comment) internally, writing to
+# dir_of(project)+"/beat.wav" for a track named "beat" - so this does NOT
+# pre-decode itself the way the vocal path does; a first attempt that
+# pre-decoded to a file ALSO named "beat.wav" made ffmpeg refuse with
+# "Output same as Input" (track-import's own decode tried to write that
+# exact path right back onto itself). Once registered, every downstream
+# step (mixer, EQ/compressor/duck/delay, master, stems) treats this
+# track identically to a generated beat, since none of that code ever
+# branches on how the track's audio was produced. No melody track is
+# generated to lay under an uploaded beat - we don't know its key/chords,
+# and layering our own bass/chords under an unrelated beat would likely
+# clash rather than fit.
+def import_uploaded_beat(d, project, timeout=120):
+    raw_path = find_beat_upload_file(d)
+    if raw_path is None:
+        return "no uploaded beat file found"
+    p = run(BEATSTUDIO + ["track-import", raw_path, "--name=beat", "--file=" + project], timeout=timeout)
+    if p.returncode != 0:
+        return "couldn't add the uploaded beat as a track: " + (p.stdout[-800:] if p.stdout else "")
+    return None
 
 
 def melody_render(project, timeout=300):
@@ -469,27 +554,78 @@ def process_beat_requested(session_id, d):
     if p.returncode != 0:
         write_status(d, "error", message="init failed", detail=p.stdout[-800:])
         return
-    p = generate_beat(project, beat)
-    if p.returncode != 0:
-        write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
-        return
-    p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
-    if p.returncode != 0:
-        write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
-        return
-    if beat.get("melody", True):
-        p = melody_render(project)
-        if p.returncode != 0:
-            write_status(d, "error", message="melody render failed", detail=p.stdout[-800:])
+
+    if beat.get("customUpload"):
+        # PLAN7.md "upload your own beat" - no generation, no uniqueness
+        # ledger (that guards OUR generator's output, not a visitor's own
+        # file), no melody (we don't know an arbitrary beat's key/chords).
+        err = import_uploaded_beat(d, project)
+        if err:
+            write_status(d, "error", message="couldn't use your uploaded beat", detail=err)
             return
-        # Default melody level for the FREE beat-only preview - matches
-        # DEFAULT_PARAMS["tracks"]["melody"]["gain"] used once a vocal is
-        # recorded, so the preview a visitor hears here doesn't jump in
-        # relative balance the moment they move on to recording.
-        p = run(BEATSTUDIO + ["mix", "melody", "--gain=-6.0", "--file=" + project])
+    else:
+        p = generate_beat(project, beat)
         if p.returncode != 0:
-            write_status(d, "error", message="couldn't set melody level", detail=p.stdout[-800:])
+            write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
             return
+
+        # PLAN7.md uniqueness fix - see _project_fingerprint's own comment.
+        # Deterministic seed bump (a large prime offset per attempt) rather
+        # than a fresh time-based reroll, so a retry sequence is itself
+        # reproducible for debugging. Fail-open: if every real combination
+        # in a genre's pool has genuinely been used in the last few hours
+        # (a real possibility for a genre with a small pool, e.g. 2
+        # variants x 2 progressions x 3 keys = 12), accept the repeat
+        # after exhausting attempts rather than error a visitor out of
+        # ever getting a beat.
+        conn = _fingerprint_conn()
+        try:
+            fp = _project_fingerprint(project)
+            attempt = 0
+            while _fingerprint_is_recent(conn, fp) and attempt < MAX_UNIQUENESS_ATTEMPTS:
+                attempt += 1
+                beat = dict(beat, seed=beat["seed"] + attempt * 104729)
+                p = generate_beat(project, beat)
+                if p.returncode != 0:
+                    write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
+                    return
+                fp = _project_fingerprint(project)
+            _record_fingerprint(conn, fp)
+        finally:
+            conn.close()
+
+        # The retry loop above only bumps `beat["seed"]` in this in-memory
+        # dict - beat.json on disk still holds the ORIGINAL seed a visitor
+        # never actually heard. process_uploaded's first-time path (below)
+        # re-runs generate_beat straight from beat.json to build the beat
+        # that actually gets recorded onto - without persisting the final
+        # seed back here, a bumped preview and the real recorded beat
+        # would silently diverge (the visitor rehearses against one
+        # variant/progression/key, the take gets rendered with another).
+        beat_json_path = os.path.join(d, "beat.json")
+        tmp = beat_json_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(beat, f)
+        os.replace(tmp, beat_json_path)
+
+        p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
+        if p.returncode != 0:
+            write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
+            return
+        if beat.get("melody", True):
+            p = melody_render(project)
+            if p.returncode != 0:
+                write_status(d, "error", message="melody render failed", detail=p.stdout[-800:])
+                return
+            # Default melody level for the FREE beat-only preview - matches
+            # DEFAULT_PARAMS["tracks"]["melody"]["gain"] used once a vocal is
+            # recorded, so the preview a visitor hears here doesn't jump in
+            # relative balance the moment they move on to recording.
+            p = run(BEATSTUDIO + ["mix", "melody", "--gain=-6.0", "--file=" + project])
+            if p.returncode != 0:
+                write_status(d, "error", message="couldn't set melody level", detail=p.stdout[-800:])
+                return
+
     p = run(BEATSTUDIO + ["preview", "--file=" + project], timeout=120)
     if p.returncode != 0:
         write_status(d, "error", message="beat preview failed", detail=p.stdout[-800:])
@@ -499,6 +635,10 @@ def process_beat_requested(session_id, d):
     os.makedirs(out_dir, exist_ok=True)
     shutil.copyfile(os.path.join(d, "preview.wav"), os.path.join(out_dir, "beat_preview.wav"))
     os.chmod(os.path.join(out_dir, "beat_preview.wav"), 0o644)
+    # PLAN7.md "download this beat" - beat_url IS the real, complete
+    # rendered instrumental (same file the page plays back), so a plain
+    # <a download> on the page pointing at it is all "download to
+    # practice with" needs - no separate copy/endpoint required.
     write_status(d, "beat_ready", beat_url="/beatstudio/results/" + session_id + "/beat_preview.wav",
                  genre=beat["genre"], bpm=beat["bpm"], melody=beat.get("melody", True))
 
@@ -561,19 +701,26 @@ def process_uploaded(session_id, d):
             write_status(d, "error", message="init failed", detail=p.stdout[-800:])
             return
 
-        write_status(d, "processing", stage="Generating your beat...")
-        p = generate_beat(project, beat)
-        if p.returncode != 0:
-            write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
-            return
+        if beat.get("customUpload"):
+            write_status(d, "processing", stage="Adding your beat...")
+            err = import_uploaded_beat(d, project)
+            if err:
+                write_status(d, "error", message="couldn't use your uploaded beat", detail=err)
+                return
+        else:
+            write_status(d, "processing", stage="Generating your beat...")
+            p = generate_beat(project, beat)
+            if p.returncode != 0:
+                write_status(d, "error", message="beat generation failed", detail=p.stdout[-800:])
+                return
 
-        write_status(d, "processing", stage="Rendering the beat...")
-        p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
-        if p.returncode != 0:
-            write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
-            return
+            write_status(d, "processing", stage="Rendering the beat...")
+            p = run(BEATSTUDIO + ["beat-render", "--file=" + project], timeout=300)
+            if p.returncode != 0:
+                write_status(d, "error", message="beat render failed", detail=p.stdout[-800:])
+                return
 
-        if beat.get("melody", True):
+        if beat.get("melody", True) and not beat.get("customUpload"):
             write_status(d, "processing", stage="Rendering bass & chords...")
             p = melody_render(project)
             if p.returncode != 0:

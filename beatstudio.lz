@@ -587,14 +587,30 @@ fn set_steps(pat, voice, steps_list) {
   for s in steps_list { pat[voice][s] = true }
 }
 
-fn gen_intro(genre) {
+# PLAN7.md uniqueness fix: `variant` (0 or 1, see cmd_generate) picks
+# between 2 real skeletons per genre instead of every project of a genre
+# always opening on the identical bookend bar.
+fn gen_intro(genre, variant) {
   let pat = empty_pattern()
-  if genre == "trap" { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
-  else if genre == "lofi" { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 8]) }
-  else if genre == "boombap" { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
-  else if genre == "pop" { set_steps(pat, "hihat", [0, 4, 8, 12]) }
-  else if genre == "afrobeat" { set_steps(pat, "tom", [0, 6]); set_steps(pat, "hihat", [2, 6, 10, 14]) }
-  else if genre == "house" { set_steps(pat, "kick", [0, 8]); set_steps(pat, "ohat", [4, 12]) }
+  if genre == "trap" {
+    if variant == 0 { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+    else { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 6, 8, 14]) }
+  } else if genre == "lofi" {
+    if variant == 0 { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 8]) }
+    else { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 6, 8, 14]) }
+  } else if genre == "boombap" {
+    if variant == 0 { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+    else { set_steps(pat, "kick", [0, 10]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+  } else if genre == "pop" {
+    if variant == 0 { set_steps(pat, "hihat", [0, 4, 8, 12]) }
+    else { set_steps(pat, "hihat", [0, 2, 4, 6, 8, 10, 12, 14]) }
+  } else if genre == "afrobeat" {
+    if variant == 0 { set_steps(pat, "tom", [0, 6]); set_steps(pat, "hihat", [2, 6, 10, 14]) }
+    else { set_steps(pat, "tom", [0, 8]); set_steps(pat, "hihat", [2, 4, 10, 12]) }
+  } else if genre == "house" {
+    if variant == 0 { set_steps(pat, "kick", [0, 8]); set_steps(pat, "ohat", [4, 12]) }
+    else { set_steps(pat, "kick", [0, 8]); set_steps(pat, "ohat", [2, 6, 10, 14]) }
+  }
   return pat
 }
 
@@ -602,46 +618,72 @@ fn gen_intro(genre) {
 # which steps, and how dense the hats are. Extra voices (808/tom/open
 # hat) layer in per genre instead of every genre using all 8 the same
 # way - a real arrangement choice, not just "more voices = more full".
-fn gen_main(genre) {
+#
+# PLAN7.md uniqueness fix: before this, the kick/snare/clap/tom SKELETON
+# below was the one and only thing every project of a genre ever built -
+# `maybe()` only ever touched hi-hat density and a couple of single-hit
+# flourishes, so two regenerations of "trap" always shared the identical
+# rhythmic identity and just differed in hi-hat noise. `variant` (0 or 1,
+# chosen once per generate() call, see cmd_generate) now picks between 2
+# real, genuinely different skeletons per genre - fill/chorus/bridge all
+# derive from whichever variant gen_main built, so the choice propagates
+# through the whole arrangement instead of needing its own separate pool.
+fn gen_main(genre, variant) {
   let pat = empty_pattern()
   if genre == "trap" {
-    set_steps(pat, "kick", [0, 10])
-    if maybe(0.5) { pat["kick"][6] = true }
+    if variant == 0 {
+      set_steps(pat, "kick", [0, 10])
+      if maybe(0.5) { pat["kick"][6] = true }
+      set_steps(pat, "sub808", [0, 10])
+    } else {
+      set_steps(pat, "kick", [0, 6, 10])
+      set_steps(pat, "sub808", [0, 6, 10])
+    }
     set_steps(pat, "clap", [4, 12])
-    set_steps(pat, "sub808", [0, 10])
     let s = 0
-    while s < STEPS { if maybe(0.85) { pat["hihat"][s] = true } s = s + 1 }
-    if maybe(0.6) { pat["ohat"][14] = true }
+    let hat_prob = variant == 0 ? 0.85 : 0.75
+    while s < STEPS { if maybe(hat_prob) { pat["hihat"][s] = true } s = s + 1 }
+    if maybe(variant == 0 ? 0.6 : 0.5) { pat["ohat"][14] = true }
   } else if genre == "lofi" {
-    set_steps(pat, "kick", [0, 9])
+    if variant == 0 { set_steps(pat, "kick", [0, 9]) } else { set_steps(pat, "kick", [0, 7]) }
     set_steps(pat, "clap", [4, 12])
-    let s = 0
-    while s < STEPS { if s % 2 == 0 and maybe(0.7) { pat["hihat"][s] = true } s = s + 2 }
+    let s = variant == 0 ? 0 : 1
+    while s < STEPS { if maybe(variant == 0 ? 0.7 : 0.6) { pat["hihat"][s] = true } s = s + 2 }
   } else if genre == "boombap" {
-    set_steps(pat, "kick", [0, 6, 10])
-    if maybe(0.25) { pat["kick"][3] = true }
-    if maybe(0.25) { pat["kick"][13] = true }
+    if variant == 0 {
+      set_steps(pat, "kick", [0, 6, 10])
+      if maybe(0.25) { pat["kick"][3] = true }
+      if maybe(0.25) { pat["kick"][13] = true }
+    } else {
+      set_steps(pat, "kick", [0, 7, 10])
+      if maybe(0.3) { pat["kick"][13] = true }
+    }
     set_steps(pat, "snare", [4, 12])
     let s = 0
-    while s < STEPS { if maybe(0.85) { pat["hihat"][s] = true } s = s + 1 }
+    while s < STEPS { if maybe(variant == 0 ? 0.85 : 0.75) { pat["hihat"][s] = true } s = s + 1 }
   } else if genre == "pop" {
-    set_steps(pat, "kick", [0, 8])
+    if variant == 0 { set_steps(pat, "kick", [0, 8]) } else { set_steps(pat, "kick", [0, 6, 8]) }
     set_steps(pat, "clap", [4, 12])
     let s = 0
     while s < STEPS { if s % 2 == 0 { pat["hihat"][s] = true } s = s + 2 }
+    if variant == 1 { let s2 = 1; while s2 < STEPS { if maybe(0.4) { pat["hihat"][s2] = true } s2 = s2 + 2 } }
     if maybe(0.3) { pat["ohat"][14] = true }
   } else if genre == "afrobeat" {
-    set_steps(pat, "kick", [0, 3, 8, 11])
+    if variant == 0 { set_steps(pat, "kick", [0, 3, 8, 11]); set_steps(pat, "tom", [10]) }
+    else { set_steps(pat, "kick", [0, 3, 6, 11]); set_steps(pat, "tom", [2, 10]) }
     set_steps(pat, "clap", [6, 14])
-    set_steps(pat, "tom", [10])
     let s = 2
-    while s < STEPS { if maybe(0.75) { pat["hihat"][s] = true } s = s + 2 }
+    while s < STEPS { if maybe(variant == 0 ? 0.75 : 0.6) { pat["hihat"][s] = true } s = s + 2 }
   } else if genre == "house" {
+    # Four-on-the-floor kick is house's actual defining identity, so it
+    # stays fixed across variants - the variety here lives in the
+    # off-beat percussion around it instead, matching how real house
+    # tracks vary.
     set_steps(pat, "kick", [0, 4, 8, 12])
     set_steps(pat, "clap", [4, 12])
-    set_steps(pat, "ohat", [2, 6, 10, 14])
+    if variant == 0 { set_steps(pat, "ohat", [2, 6, 10, 14]) } else { set_steps(pat, "ohat", [2, 10]); set_steps(pat, "tom", [6, 14]) }
     let s = 0
-    while s < STEPS { if maybe(0.4) { pat["hihat"][s] = true } s = s + 1 }
+    while s < STEPS { if maybe(variant == 0 ? 0.4 : 0.6) { pat["hihat"][s] = true } s = s + 1 }
   }
   return pat
 }
@@ -650,8 +692,8 @@ fn gen_main(genre) {
 # the downbeat, extra snare/clap hits) - not a second unrelated pattern,
 # so it still sounds like the same song varying, not a different track
 # spliced in.
-fn gen_fill(genre) {
-  let pat = gen_main(genre)
+fn gen_fill(genre, variant) {
+  let pat = gen_main(genre, variant)
   let s = 0
   while s < STEPS { if maybe(0.3) { pat["hihat"][s] = true } s = s + 1 }
   pat["crash"][0] = true
@@ -666,8 +708,8 @@ fn gen_fill(genre) {
 # gen_main PLUS fixed, deliberate per-genre layering (not just fill's
 # probabilistic extra hits), the same way a real chorus is usually the
 # verse groove with more energy stacked on top, not a different song.
-fn gen_chorus(genre) {
-  let pat = gen_main(genre)
+fn gen_chorus(genre, variant) {
+  let pat = gen_main(genre, variant)
   if genre == "trap" {
     set_steps(pat, "ohat", [6, 14])
     pat["crash"][0] = true
@@ -700,14 +742,25 @@ fn gen_chorus(genre) {
 # A bridge/breakdown - real contrast partway through a song via genuine
 # SPACE (fewer active voices), not just a quieter version of the same
 # groove - the way real songs pull back before the final choruses.
-fn gen_bridge(genre) {
+fn gen_bridge(genre, variant) {
   let pat = empty_pattern()
-  if genre == "trap" { set_steps(pat, "kick", [0]); set_steps(pat, "sub808", [0]); set_steps(pat, "hihat", [0, 8]) }
-  else if genre == "lofi" { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [4, 12]) }
-  else if genre == "boombap" { set_steps(pat, "kick", [0, 10]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
-  else if genre == "pop" { set_steps(pat, "kick", [0, 8]) }
-  else if genre == "afrobeat" { set_steps(pat, "kick", [0, 8]); set_steps(pat, "tom", [10]) }
-  else if genre == "house" { set_steps(pat, "kick", [0, 4, 8, 12]) }
+  if genre == "trap" {
+    if variant == 0 { set_steps(pat, "kick", [0]); set_steps(pat, "sub808", [0]); set_steps(pat, "hihat", [0, 8]) }
+    else { set_steps(pat, "kick", [0, 8]); set_steps(pat, "sub808", [0, 8]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+  } else if genre == "lofi" {
+    if variant == 0 { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [4, 12]) }
+    else { set_steps(pat, "kick", [0]); set_steps(pat, "hihat", [6, 14]) }
+  } else if genre == "boombap" {
+    if variant == 0 { set_steps(pat, "kick", [0, 10]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+    else { set_steps(pat, "kick", [0, 7]); set_steps(pat, "hihat", [0, 4, 8, 12]) }
+  } else if genre == "pop" {
+    if variant == 0 { set_steps(pat, "kick", [0, 8]) } else { set_steps(pat, "kick", [0]) }
+  } else if genre == "afrobeat" {
+    if variant == 0 { set_steps(pat, "kick", [0, 8]); set_steps(pat, "tom", [10]) }
+    else { set_steps(pat, "kick", [0, 6]); set_steps(pat, "tom", [2, 10]) }
+  } else if genre == "house" {
+    if variant == 0 { set_steps(pat, "kick", [0, 4, 8, 12]) } else { set_steps(pat, "kick", [0, 8]); set_steps(pat, "ohat", [4, 12]) }
+  }
   return pat
 }
 
@@ -823,22 +876,54 @@ fn chord_notes(key_root_semitone, deg, quality) {
   return out
 }
 
-# Each genre's progression: a short, fixed loop of {deg, q} relative to
-# the project's key root - `deg` is semitones above the root (a real
-# scale-degree choice per genre, not an arbitrary number: e.g. trap's
-# 0/8/3/10 is the natural-minor i-VI-III-VII loop countless trap/drill
-# beats actually use; pop's 0/7/9/5 is the I-V-vi-IV loop that's been a
-# pop-radio staple for decades). Cycles if the arrangement has more bars
-# than the progression length - a real repeating loop, matching how one
-# drum pattern name already repeats across many bars in render.
-fn genre_progression(genre) {
-  if genre == "trap" { return [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":3,"q":"major"},{"deg":10,"q":"major"}] }
-  if genre == "lofi" { return [{"deg":2,"q":"minor7"},{"deg":7,"q":"dom7"},{"deg":0,"q":"major7"},{"deg":0,"q":"major7"}] }
-  if genre == "boombap" { return [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}] }
-  if genre == "pop" { return [{"deg":0,"q":"major"},{"deg":7,"q":"major"},{"deg":9,"q":"minor"},{"deg":5,"q":"major"}] }
-  if genre == "afrobeat" { return [{"deg":0,"q":"major"},{"deg":5,"q":"major"},{"deg":7,"q":"major"},{"deg":5,"q":"major"}] }
-  if genre == "house" { return [{"deg":0,"q":"minor"},{"deg":10,"q":"major"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}] }
+# Each genre's progression POOL: 2 real, distinct loops of {deg, q}
+# relative to the project's key root - `deg` is semitones above the root
+# (a real scale-degree choice per genre, not an arbitrary number: e.g.
+# trap's 0/8/3/10 is the natural-minor i-VI-III-VII loop countless
+# trap/drill beats actually use; pop's 0/7/9/5 is the I-V-vi-IV loop
+# that's been a pop-radio staple for decades). One is picked per
+# generate() call (see cmd_generate) - PLAN7.md's uniqueness fix: before
+# this, every project of a given genre used the EXACT same harmonic
+# identity, which is the biggest reason regenerations of the same genre
+# sounded like "the same track again" regardless of drum micro-variation.
+# Cycles if the arrangement has more bars than the progression length - a
+# real repeating loop, matching how one drum pattern name already repeats
+# across many bars in render.
+fn genre_progressions(genre) {
+  if genre == "trap" { return [
+    [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":3,"q":"major"},{"deg":10,"q":"major"}],
+    [{"deg":0,"q":"minor"},{"deg":10,"q":"major"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}],
+  ] }
+  if genre == "lofi" { return [
+    [{"deg":2,"q":"minor7"},{"deg":7,"q":"dom7"},{"deg":0,"q":"major7"},{"deg":0,"q":"major7"}],
+    [{"deg":0,"q":"major7"},{"deg":9,"q":"minor7"},{"deg":2,"q":"minor7"},{"deg":7,"q":"dom7"}],
+  ] }
+  if genre == "boombap" { return [
+    [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}],
+    [{"deg":0,"q":"minor"},{"deg":5,"q":"minor"},{"deg":3,"q":"major"},{"deg":10,"q":"major"}],
+  ] }
+  if genre == "pop" { return [
+    [{"deg":0,"q":"major"},{"deg":7,"q":"major"},{"deg":9,"q":"minor"},{"deg":5,"q":"major"}],
+    [{"deg":9,"q":"minor"},{"deg":5,"q":"major"},{"deg":0,"q":"major"},{"deg":7,"q":"major"}],
+  ] }
+  if genre == "afrobeat" { return [
+    [{"deg":0,"q":"major"},{"deg":5,"q":"major"},{"deg":7,"q":"major"},{"deg":5,"q":"major"}],
+    [{"deg":0,"q":"major"},{"deg":9,"q":"minor"},{"deg":5,"q":"major"},{"deg":7,"q":"major"}],
+  ] }
+  if genre == "house" { return [
+    [{"deg":0,"q":"minor"},{"deg":10,"q":"major"},{"deg":8,"q":"major"},{"deg":10,"q":"major"}],
+    [{"deg":0,"q":"minor"},{"deg":8,"q":"major"},{"deg":3,"q":"major"},{"deg":10,"q":"major"}],
+  ] }
   fail("unknown genre '" + genre + "' - choices: " + str(GENRES))
+}
+
+# Picks one progression out of the genre's pool - clamped by modulo
+# rather than failing on an out-of-range index so an old project.json
+# saved before this pool existed (implicit progression_variant=0) or a
+# hand-typed --progression=N still resolves to something valid.
+fn genre_progression(genre, idx) {
+  let pool = genre_progressions(genre)
+  return pool[idx % len(pool)]
 }
 
 # Default key root (semitones from A4) per genre, chosen for a comfortable
@@ -851,6 +936,16 @@ fn genre_default_key(genre) {
   return -21
 }
 
+# A small pool of real key-root choices around the genre's documented
+# center (PLAN7.md uniqueness fix) - +3/-2 semitones is enough to
+# genuinely move the tonal center (e.g. A minor -> C minor -> G minor for
+# a -12 center) while staying in the same comfortable bass/pad register
+# genre_default_key was chosen for. --key= still overrides this entirely.
+fn genre_keys(genre) {
+  let base = genre_default_key(genre)
+  return [base, base + 3, base - 2]
+}
+
 fn bass_steps(genre) {
   if genre == "trap" { return [0, 10] }
   if genre == "lofi" { return [0, 9] }
@@ -861,8 +956,8 @@ fn bass_steps(genre) {
   fail("unknown genre '" + genre + "' - choices: " + str(GENRES))
 }
 
-fn gen_chords(genre, num_bars) {
-  let prog = genre_progression(genre)
+fn gen_chords(genre, num_bars, prog_idx) {
+  let prog = genre_progression(genre, prog_idx)
   let out = []
   let i = 0
   while i < num_bars { out.push(prog[i % len(prog)]); i = i + 1 }
@@ -964,7 +1059,7 @@ fn render_melody_bar(key_root_semitone, chord, bpm, genre) {
 
 fn cmd_generate(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
-  if len(a["positional"]) < 1 { fail("usage: generate GENRE [--bpm=N] [--bars=N] [--seed=N]") }
+  if len(a["positional"]) < 1 { fail("usage: generate GENRE [--bpm=N] [--bars=N] [--seed=N] [--variant=0|1] [--progression=N] [--key=N]") }
   let genre = a["positional"][0]
   let default_bpm = genre_default_bpm(genre)   # also validates genre
   let bpm = float(argmod.flag(a, "bpm", str(default_bpm)))
@@ -972,6 +1067,21 @@ fn cmd_generate(a) {
   if bars < 1 { fail("--bars must be at least 1") }
   let seed = int(argmod.flag(a, "seed", str(int(time()))))
   rng.seed(seed)
+
+  # PLAN7.md uniqueness fix: the drum skeleton, chord progression AND key
+  # were previously 100% fixed per genre (only hi-hat density used the
+  # seed at all) - two regenerations of the same genre were musically
+  # identical every time. These 3 real choices are now seed-derived
+  # (rolled in this fixed order so a given --seed is still fully
+  # reproducible) and each independently --flag-overridable for testing/
+  # explicit control. The web backend can also pass these explicitly
+  # (already computing its own server-side seed) to steer clear of a
+  # very recent combination - see backend.py's fingerprint ledger.
+  let progs = genre_progressions(genre)
+  let keys = genre_keys(genre)
+  let variant = int(argmod.flag(a, "variant", str(rng.randint(0, 1))))
+  let prog_idx = int(argmod.flag(a, "progression", str(rng.randint(0, len(progs) - 1))))
+  let key = int(argmod.flag(a, "key", str(rng.choice(keys))))
 
   let p = fs.exists(path) ? load_project(path) : {
     "bpm": bpm, "budget_cents": 0, "spent_cents": 0,
@@ -981,9 +1091,11 @@ fn cmd_generate(a) {
   p["bpm"] = bpm
   p["genre"] = genre
   p["seed"] = seed
-  p["patterns"]["intro"] = gen_intro(genre)
-  p["patterns"]["main"] = gen_main(genre)
-  p["patterns"]["fill"] = gen_fill(genre)
+  p["variant"] = variant
+  p["progression_variant"] = prog_idx
+  p["patterns"]["intro"] = gen_intro(genre, variant)
+  p["patterns"]["main"] = gen_main(genre, variant)
+  p["patterns"]["fill"] = gen_fill(genre, variant)
 
   # PLAN4.md Phase I: --target-seconds= opts into a real, length-scaled
   # verse/chorus/bridge song structure instead of the short fixed
@@ -994,8 +1106,8 @@ fn cmd_generate(a) {
   if target_seconds != nil {
     let bar_dur = 60.0 / bpm / 4.0 * STEPS
     let target_bars = int(float(target_seconds) / bar_dur)
-    p["patterns"]["chorus"] = gen_chorus(genre)
-    p["patterns"]["bridge"] = gen_bridge(genre)
+    p["patterns"]["chorus"] = gen_chorus(genre, variant)
+    p["patterns"]["bridge"] = gen_bridge(genre, variant)
     # build_full_arrangement already returns a fully-expanded list of
     # pattern names (not a compact spec string) - parse_arrangement is
     # for the spec-string syntax "main*8,fill", so this validates each
@@ -1022,14 +1134,14 @@ fn cmd_generate(a) {
   # together 1:1. --no-melody keeps the project drums-only (some users
   # may still want that) without touching anything else generate does.
   p["melody_enabled"] = not a["flags"].has("no-melody")
-  p["key_root_semitone"] = int(argmod.flag(a, "key", str(genre_default_key(genre))))
-  p["chords"] = gen_chords(genre, len(p["arrangement"]))
+  p["key_root_semitone"] = key
+  p["chords"] = gen_chords(genre, len(p["arrangement"]), prog_idx)
 
   save_project(path, p)
   let bar_dur = 60.0 / bpm / 4.0 * STEPS
-  print("generated " + genre + " beat: bpm=" + str(bpm) + " seed=" + str(seed) + " -> " +
+  print("generated " + genre + " beat: bpm=" + str(bpm) + " seed=" + str(seed) + " variant=" + str(variant) + " -> " +
         str(len(p["arrangement"])) + " bars (" + str(round(len(p["arrangement"]) * bar_dur, 1)) + "s)" +
-        (p["melody_enabled"] ? ", melody: key=" + str(p["key_root_semitone"]) + " " + str(genre_progression(genre)) : ", melody: disabled"))
+        (p["melody_enabled"] ? ", melody: key=" + str(key) + " " + str(genre_progression(genre, prog_idx)) : ", melody: disabled"))
 }
 
 # Renders the arrangement (or just 'main') bar by bar, streaming each bar
@@ -2324,7 +2436,7 @@ fn cmd_report(a) {
     print("")
   }
   if p.has("chords") and len(p["chords"]) > 0 {
-    let loop = p["melody_enabled"] ? str(genre_progression(p["genre"])) : "disabled (--no-melody)"
+    let loop = p["melody_enabled"] ? str(genre_progression(p["genre"], tget(p, "progression_variant", 0))) : "disabled (--no-melody)"
     print("melody: key=" + str(p["key_root_semitone"]) + " semitones from A4, progression loop: " + loop)
     print("")
   }

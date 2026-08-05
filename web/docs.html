@@ -172,6 +172,18 @@ footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--border); fo
     <div class="try"><b>Try this:</b> "Spotify/YouTube (-14)" is a safe default if you're uploading to streaming platforms and don't want your track turned down. Leave it off if you're going for a maximally loud, "as loud as possible" master instead.</div>
   </section>
 
+  <section class="entry" id="vocal-presets">
+    <h2>Vocal tone presets <span class="range">Clean, Warm, Radio, Bright/Pop</span></h2>
+    <p class="default">Default: Custom (no preset applied)</p>
+    <p>One click sets the vocal track's EQ, compressor, delay and reverb sliders all at once to a real, deliberate combination, instead of dialing in five separate controls by hand. <b>Clean</b> is a light presence lift with gentle compression and no added space. <b>Warm</b> rounds off the top end and adds a touch of room reverb for an intimate feel. <b>Radio</b> cuts low-end rumble, pushes the upper-mids forward and compresses harder for a broadcast-style, consistent voice. <b>Bright/Pop</b> adds an airy high shelf plus a short slap-delay and reverb blend for pop-vocal polish. Moving any individual slider afterward drops back to "Custom" — an honest signal that what's about to render no longer exactly matches the preset's numbers, the same way the master Loud/Warm/Clean presets behave.</p>
+    <div class="try"><b>Try this:</b> start with a preset close to what you're going for, then nudge individual sliders from there instead of building a chain from scratch.</div>
+  </section>
+
+  <section class="entry" id="upload-your-own-beat">
+    <h2>Upload your own beat</h2>
+    <p>Already have an instrumental — your own or someone else's? Under "Choose your beat," pick a file instead of a genre and it's used as-is for the "Beat" track. Every mixer/EQ/compressor/master control still works on it exactly like a generated beat. No bass/chords layer gets added on top, since this app doesn't know an arbitrary beat's key or chords — only its own generated beats get that.</p>
+  </section>
+
   <section class="entry">
     <h2>Why this works this way</h2>
     <p>Every one of these controls maps directly to a parameter in a real, from-scratch signal-processing program written in Larzscript — a 3-band EQ (Warmth/Clarity/Air), a linked stereo compressor (Punch), and a brickwall limiter (Loudness), the same building blocks real mastering engineers and plugins use. There's no AI guessing, no hidden preset — moving a slider and hitting "Apply" re-runs that exact math on your actual recording, streamed through in small chunks so an 8-minute take renders in about the same time as a 30-second one.</p>

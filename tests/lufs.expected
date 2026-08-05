@@ -1,11 +1,11 @@
 project created: bpm=120, budget=$20.00
-generated pop beat: bpm=120 seed=2 -> 7 bars (14s), melody: key=-21 [{deg: 0, q: major}, {deg: 7, q: major}, {deg: 9, q: minor}, {deg: 5, q: major}]
+generated pop beat: bpm=120 seed=2 variant=0 -> 7 bars (14s), melody: key=-21 [{deg: 0, q: major}, {deg: 7, q: major}, {deg: 9, q: minor}, {deg: 5, q: major}]
 beat rendered: 14s -> PROJECT_DIR/beat.wav
 mastered -> PROJECT_DIR/master_1.wav
-peak: -1 dBFS, rms: -20.03 dBFS, loudness: -15.51 LUFS (approx.)
+peak: -1 dBFS, rms: -20.22 dBFS, loudness: -15.53 LUFS (approx.)
 charged: $1.00, remaining: $19.00
 mastered -> PROJECT_DIR/master_2.wav
-peak: -7.89 dBFS, rms: -25.87 dBFS, loudness: -21.94 LUFS (approx.)
+peak: -7.97 dBFS, rms: -26.02 dBFS, loudness: -21.95 LUFS (approx.)
 remaster is free - already unlocked by this project's first master
 bpm: 120
 
@@ -14,7 +14,7 @@ pattern 'fill':
 |--------|------------------|
 | kick   | X.......X....... |
 | snare  | ................ |
-| hihat  | X.X.X.X.XXXXXXXX |
+| hihat  | XXX.X.X.XXX.X.X. |
 | clap   | ..X.X.....X.X... |
 | ohat   | ..............X. |
 | tom    | ................ |
@@ -40,7 +40,7 @@ pattern 'main':
 | snare  | ................ |
 | hihat  | X.X.X.X.X.X.X.X. |
 | clap   | ....X.......X... |
-| ohat   | ..............X. |
+| ohat   | ................ |
 | tom    | ................ |
 | crash  | ................ |
 | sub808 | ................ |
@@ -53,5 +53,5 @@ arrangement (7 bars, 14s): [intro, intro, main, fill, main, main, intro]
 |-------|------------|-----------|-----|-------|
 | beat  | 14         | 0         | 0   | false |
 
-last master: PROJECT_DIR/master_2.wav (peak -7.89 dBFS)
+last master: PROJECT_DIR/master_2.wav (peak -7.97 dBFS)
 budget: $20.00  spent: $1.00  remaining: $19.00

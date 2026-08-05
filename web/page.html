@@ -248,6 +248,18 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
           <span class="time" data-deck="beatgen">0:00</span>
         </div>
       </div>
+      <div class="mixer-actions" id="beat-download-row" style="display:none; margin-top:10px">
+        <a class="btn-ghost" id="beat-download-link" download>&#8681; Download this beat</a>
+        <span class="mixer-note" style="margin-top:0">Practice against it offline before you record.</span>
+      </div>
+
+      <div class="section-label" style="margin-top:22px">Or upload your own beat</div>
+      <p class="sub" style="margin:-2px 0 12px">Already have an instrumental? Use it instead of generating one — any common audio format works. No bass/chords are added on top of your own beat.</p>
+      <div class="mixer-actions" style="margin-top:0">
+        <input type="file" id="beat-upload-input" accept="audio/*" style="display:none">
+        <button class="btn-ghost" id="beat-upload-btn">Choose an audio file&hellip;</button>
+        <span class="mixer-note" id="beat-upload-status" style="margin-top:0"></span>
+      </div>
     </div>
   </section>
 
@@ -403,6 +415,14 @@ footer{margin-top:50px; padding-top:22px; border-top:1px solid var(--border); fo
       </div>
       <button type="button" class="adv-toggle" data-adv-toggle>Advanced <span class="car">&#9656;</span></button>
       <div class="adv-body" data-adv-body>
+        <div class="adv-sub">Vocal tone preset <span class="hint">— one click sets EQ, compressor, delay &amp; reverb below; fine-tune any slider after and it drops back to Custom</span></div>
+        <div class="preset-row" id="vocal-preset-row">
+          <button type="button" class="preset-chip" data-vocal-preset="clean">Clean</button>
+          <button type="button" class="preset-chip" data-vocal-preset="warm">Warm</button>
+          <button type="button" class="preset-chip" data-vocal-preset="radio">Radio</button>
+          <button type="button" class="preset-chip" data-vocal-preset="bright">Bright/Pop</button>
+          <button type="button" class="preset-chip active" data-vocal-preset="custom">Custom</button>
+        </div>
         <div class="adv-sub">EQ</div>
         <div class="ctrl-row"><label>Low</label><input type="range" data-strip="eqLow" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqLow">0 dB</span></div>
         <div class="ctrl-row"><label>Mid</label><input type="range" data-strip="eqMid" min="-12" max="12" step="0.5" value="0"><span class="val" data-readout="eqMid">0 dB</span></div>
@@ -700,6 +720,37 @@ generateBtn.addEventListener("click", async () => {
   }
 });
 
+// ---- upload your own beat (instead of generating one) ----
+const beatUploadInput = document.getElementById("beat-upload-input");
+const beatUploadBtn = document.getElementById("beat-upload-btn");
+const beatUploadStatus = document.getElementById("beat-upload-status");
+
+beatUploadBtn.addEventListener("click", () => beatUploadInput.click());
+beatUploadInput.addEventListener("change", async () => {
+  const file = beatUploadInput.files[0];
+  if (!file) return;
+  beatUploadBtn.disabled = true;
+  generateBtn.disabled = true;
+  beatUploadStatus.textContent = "Uploading “" + file.name + "”…";
+  setBeatgenStatus("");
+  try {
+    const res = await fetch(API + "/beat-upload?session=" + sessionId, {
+      method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    beatUploadStatus.textContent = "Using “" + file.name + "” as your beat.";
+    setBeatgenStatus("Processing your uploaded beat...");
+    pollBeatStatus();
+  } catch (e) {
+    beatUploadStatus.textContent = "Couldn't upload: " + e.message;
+    beatUploadBtn.disabled = false;
+    generateBtn.disabled = false;
+  } finally {
+    beatUploadInput.value = "";
+  }
+});
+
 function pollBeatStatus(){
   const iv = setInterval(async () => {
     let data;
@@ -711,6 +762,7 @@ function pollBeatStatus(){
       beatReady = true;
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate another beat";
+      beatUploadBtn.disabled = false;
       setBeatgenStatus(data.melody ? "Ready — bass & chords included. Press play to preview." : "Ready — drums only. Press play to preview.", "ok");
       document.getElementById("deck-beatgen").classList.add("on");
       const url = data.beat_url + "?v=" + Date.now();
@@ -718,10 +770,16 @@ function pollBeatStatus(){
       else beatgenDeck.setSrc(url);
       recSub.textContent = "Your " + data.genre + " beat plays while you perform.";
       melodyPanel.style.display = data.melody ? "" : "none";
+      // PLAN7.md "download this beat" - beat_url is the real, complete
+      // rendered instrumental (same file the deck above plays), so a
+      // plain download link is all "practice with it offline" needs.
+      document.getElementById("beat-download-link").href = data.beat_url;
+      document.getElementById("beat-download-row").style.display = "";
     } else if (data.status === "error") {
       clearInterval(iv);
       setBeatgenStatus("Something went wrong: " + (data.message || "unknown error"), "err");
       generateBtn.disabled = false;
+      beatUploadBtn.disabled = false;
     }
   }, 2000);
 }
@@ -749,6 +807,53 @@ let elapsed = 0;
 const MAX_SECONDS = 480; // verified safe on the production box up to 8 minutes - see PLAN.md
 
 let takes = []; // {blob, url, duration, trimStart, trimEnd, gapBefore}
+
+// PLAN7.md fix: a plain <audio>.loop=true restart is NOT sample-accurate
+// in any browser - it re-triggers via an internal seek/rebuffer, which
+// leaves an audible click or micro-gap at every loop boundary. That's
+// invisible for a one-off preview listen, but a "quick preview" beat is
+// only a handful of bars (a few seconds) looping for up to an 8-minute
+// take - dozens of loop boundaries per take, each with the same glitch,
+// which is exactly what reads as "doesn't always sound right"/blurred
+// during recording even though the same file plays cleanly beforehand.
+// Fix: decode the beat once into a real AudioBuffer and loop it via
+// Web Audio's AudioBufferSourceNode, whose looping is genuine sample
+// index wraparound in the render graph - no seek, no gap, no click.
+let gaplessCtx = null;
+const gaplessBufferCache = new Map(); // beat url -> decoded AudioBuffer
+let gaplessSource = null;
+
+async function getGaplessBuffer(url){
+  if (gaplessBufferCache.has(url)) return gaplessBufferCache.get(url);
+  if (!gaplessCtx) gaplessCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const resp = await fetch(url);
+  const buf = await gaplessCtx.decodeAudioData(await resp.arrayBuffer());
+  gaplessBufferCache.set(url, buf);
+  return buf;
+}
+
+function stopGaplessLoop(){
+  if (gaplessSource) {
+    try { gaplessSource.stop(); } catch (e) {}
+    try { gaplessSource.disconnect(); } catch (e) {}
+    gaplessSource = null;
+  }
+}
+
+async function startGaplessLoop(url){
+  stopGaplessLoop();
+  let buf;
+  try { buf = await getGaplessBuffer(url); }
+  catch (e) { return false; } // caller falls back to native <audio> looping
+  if (!gaplessCtx) return false;
+  const src = gaplessCtx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  src.connect(gaplessCtx.destination);
+  src.start(0);
+  gaplessSource = src;
+  return true;
+}
 
 function setStatus(msg, cls){ recStatus.textContent = msg || ""; recStatus.className = "rec-status" + (cls ? " " + cls : ""); }
 function fmtSec(s){ return Number(s).toFixed(2) + "s"; }
@@ -811,7 +916,24 @@ recBtn.addEventListener("click", async () => {
   setStatus("");
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // PLAN7.md fix: a plain {audio:true} request lets the browser pick its
+    // own constraints, and on Chrome/Android in particular that means
+    // hardware echo-cancellation/noise-suppression/auto-gain get turned
+    // on for the mic - which some Android versions implement by dropping
+    // the WHOLE OS audio session into "voice communication" mode. That
+    // mode is tuned for phone-call intelligibility, not music playback,
+    // and audibly processes/muffles the beat that's simultaneously
+    // playing out the speaker for you to perform along with (this is the
+    // literal cause a user reported: the same beat that sounded fine
+    // right after generating sounded "blurred" the moment recording
+    // started). Explicitly disabling all 3 keeps the mic path plain and
+    // the beat's own output untouched - some beat bleed into the take is
+    // an acceptable, expected tradeoff (a de-esser/gate already exist to
+    // clean up the vocal afterward), a muffled beat you can't perform
+    // against properly is not.
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
   } catch (e) {
     setStatus("Couldn't access your microphone — check your browser's permission for this page.", "err");
     return;
@@ -823,6 +945,7 @@ recBtn.addEventListener("click", async () => {
   mediaRecorder.addEventListener("dataavailable", (e) => { if (e.data.size > 0) chunks.push(e.data); });
   mediaRecorder.addEventListener("stop", () => {
     stream.getTracks().forEach(t => t.stop());
+    stopGaplessLoop();
     playbackDeck().audio.pause();
     clearInterval(timerInterval);
     stopInputMeter();
@@ -835,9 +958,15 @@ recBtn.addEventListener("click", async () => {
   mediaRecorder.start();
   startInputMeter(stream);
   const deck = playbackDeck();
-  deck.audio.currentTime = 0;
-  deck.audio.loop = true;
-  deck.audio.play().catch(() => {});
+  deck.audio.pause(); // the gapless Web Audio path drives playback now - not the <audio> element
+  const beatUrl = deck.audio.currentSrc || deck.audio.src;
+  startGaplessLoop(beatUrl).then(ok => {
+    if (!ok) { // decode failed for any reason - fall back to the old native loop rather than silence
+      deck.audio.currentTime = 0;
+      deck.audio.loop = true;
+      deck.audio.play().catch(() => {});
+    }
+  });
   recBtn.classList.add("recording");
   recTitle.textContent = "Recording — press again to stop";
   recSub.textContent = "Perform along with the beat playing now.";
@@ -1248,6 +1377,51 @@ document.querySelectorAll("#preset-row .preset-chip").forEach(chip => {
       if (input) { input.value = p[key]; input.dispatchEvent(new Event("input")); }
     });
     setActivePreset(name);
+  });
+});
+
+// PLAN7.md "more tooling, especially voice, seamless to use" - one-click
+// vocal tone presets, same shape as the master Loud/Warm/Clean presets
+// just above (fill sliders, dispatch "input" so readouts+Custom-drop
+// logic run for free). Real numbers, not placeholders: Clean is a light
+// presence lift with gentle compression and no space; Warm rounds off
+// the top end and adds a touch of room reverb for an intimate feel;
+// Radio cuts low-end rumble, pushes upper-mid forward and compresses
+// hard for broadcast-style punch/consistency; Bright/Pop adds airy high
+// shelf plus a short slap-delay + reverb blend for pop-vocal polish.
+const VOCAL_PRESETS = {
+  clean: { eqLow: 0, eqMid: 0, eqHigh: 1.5, compThresh: -18, compRatio: 2.5,
+           delayMs: 0, delayFeedback: 0.3, delayMix: 0, reverbMix: 0, reverbFeedback: 0.4 },
+  warm:  { eqLow: 2.5, eqMid: 0.5, eqHigh: -1.0, compThresh: -20, compRatio: 3.0,
+           delayMs: 0, delayFeedback: 0.3, delayMix: 0, reverbMix: 0.15, reverbFeedback: 0.35 },
+  radio: { eqLow: -3.0, eqMid: 2.0, eqHigh: 2.0, compThresh: -24, compRatio: 5.0,
+           delayMs: 0, delayFeedback: 0.3, delayMix: 0, reverbMix: 0, reverbFeedback: 0.4 },
+  bright:{ eqLow: 0, eqMid: -0.5, eqHigh: 3.5, compThresh: -18, compRatio: 3.5,
+           delayMs: 120, delayFeedback: 0.2, delayMix: 0.1, reverbMix: 0.2, reverbFeedback: 0.45 },
+};
+const vocalPanel = document.querySelector('.mix-panel[data-track="vocal"]');
+function setActiveVocalPreset(name){
+  document.querySelectorAll("#vocal-preset-row .preset-chip").forEach(c => c.classList.toggle("active", c.dataset.vocalPreset === name));
+}
+// A manual edit of the vocal strip's OWN EQ/comp/delay/reverb sliders
+// means what's about to render no longer exactly matches the preset -
+// same honest "drop to Custom" signal the master presets give, but
+// scoped to just this panel's sliders (PLAN4.md's own documented bug:
+// an unscoped ".preset-chip" selector here would have wired this SAME
+// click handler onto the master/length preset rows too).
+vocalPanel.querySelectorAll("[data-strip]").forEach(input => {
+  input.addEventListener("input", () => setActiveVocalPreset("custom"));
+});
+document.querySelectorAll("#vocal-preset-row .preset-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    const name = chip.dataset.vocalPreset;
+    if (name === "custom") { setActiveVocalPreset("custom"); return; }
+    const p = VOCAL_PRESETS[name];
+    Object.keys(p).forEach(key => {
+      const input = vocalPanel.querySelector('[data-strip="' + key + '"]');
+      if (input) { input.value = p[key]; input.dispatchEvent(new Event("input")); }
+    });
+    setActiveVocalPreset(name);
   });
 });
 

@@ -1,5 +1,5 @@
 project created: bpm=120, budget=$20.00
-generated pop beat: bpm=120 seed=3 -> 8 bars (16s), melody: disabled
+generated pop beat: bpm=120 seed=3 variant=1 -> 8 bars (16s), melody: disabled
 beat rendered: 16s -> PROJECT_DIR/beat.wav
 melody disabled for this project (generate was run with --no-melody)
 bpm: 120
@@ -7,11 +7,11 @@ bpm: 120
 pattern 'fill':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.......X....... |
+| kick   | X.....X.X....... |
 | snare  | ................ |
-| hihat  | X.X.XXX.X.XXX.XX |
+| hihat  | X.XXXXXXXXXXXXXX |
 | clap   | ..X.X.....X.X... |
-| ohat   | ................ |
+| ohat   | ..............X. |
 | tom    | ................ |
 | crash  | X............... |
 | sub808 | ................ |
@@ -21,7 +21,7 @@ pattern 'intro':
 |--------|------------------|
 | kick   | ................ |
 | snare  | ................ |
-| hihat  | X...X...X...X... |
+| hihat  | X.X.X.X.X.X.X.X. |
 | clap   | ................ |
 | ohat   | ................ |
 | tom    | ................ |
@@ -31,16 +31,16 @@ pattern 'intro':
 pattern 'main':
 | Voice  | Steps            |
 |--------|------------------|
-| kick   | X.......X....... |
+| kick   | X.....X.X....... |
 | snare  | ................ |
-| hihat  | X.X.X.X.X.X.X.X. |
+| hihat  | XXX.X.XXXXXXX.XX |
 | clap   | ....X.......X... |
-| ohat   | ..............X. |
+| ohat   | ................ |
 | tom    | ................ |
 | crash  | ................ |
 | sub808 | ................ |
 
-melody: key=-21 semitones from A4, progression loop: disabled (--no-melody)
+melody: key=-18 semitones from A4, progression loop: disabled (--no-melody)
 
 arrangement (8 bars, 16s): [intro, intro, main, main, fill, main, main, intro]
 
