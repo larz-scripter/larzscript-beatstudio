@@ -1,6 +1,75 @@
 # PLAN 4: real full-song length, autotune, true pitch-shift, real reverb
 
-Status: **planning, then built in the same session.**
+Status: **SHIPPED and DEPLOYED, 2026-08-05** (larzos.com/beatstudio/). All
+four phases (I/J/K/L) built, tested, and live. Native interpreter
+released as **native-v1.40.0**. This was the hardest round of the whole
+project - PSOLA/pitch detection alone went through 4 real, measured bugs
+before landing correct (see Phase J below and the native builtins' own
+comments).
+
+**What shipped:**
+- **I**: real verse/chorus/bridge song structure, length-scalable up to
+  5 minutes (`--target-seconds=`), instead of one groove repeated with a
+  single fill. A 300s target produced a genuine 155-bar/290.6s
+  arrangement locally; a live 180s request produced a real 170.6s song
+  in production.
+- **J**: real pitch correction (autotune) - autocorrelation pitch
+  detection + TD-PSOLA resynthesis, no FFT anywhere. A strength slider
+  (0=off/true no-op, low=natural, 1.0=hard-snap) covers both use cases
+  per how this was scoped. 2 new native builtins
+  (`_native_detect_pitch_track`/`_native_psola_shift`).
+- **K**: `double`/harmony upgraded to the SAME PSOLA engine by default -
+  genuinely tempo-preserving now (`--resample` kept as an explicit
+  fallback). A real algorithmic reverb (4 parallel Schroeder/Freeverb-
+  style combs) built entirely on the existing delay-line primitive, zero
+  new native code.
+- **L**: all of the above wired into the live pipeline - a song-length
+  picker, autotune strength/key/scale controls, reverb amount/decay,
+  updated docs.html.
+
+**4 real, measured bugs in the native PSOLA/pitch-detection code**, each
+found by re-detecting pitch on the actual OUTPUT and comparing against
+an independently-computed expected value - never by trusting the
+construction:
+1. Grains placed at the coarse analysis-hop spacing left silent gaps
+   wherever period < hop_size (true for any real vocal pitch) - output
+   pitch hadn't moved at all.
+2. Fixed the spacing, but changed pitch by resampling grain CONTENT
+   while keeping the same landing position it was read from - still
+   didn't work: overlap-add where read position always equals write
+   position is provably just the original signal again
+   (`acc[idx]/wsum[idx]` reduces to exactly `buf[idx]` algebraically).
+   The real fix needed two independent walks (analysis reads raw grains
+   at their own rate; synthesis writes them at `period/ratio` instead of
+   `period` - the retrigger-RATE difference IS the pitch shift).
+3. The pitch DETECTOR itself hit a classic autocorrelation octave-down/
+   subharmonic bug (a 2nd/3rd harmonic period often correlates almost as
+   strongly as the true fundamental) - fixed by preferring the shortest
+   genuine LOCAL PEAK within 8% of the global max.
+4. A naive first version of fix #3 ("any point above threshold," not
+   requiring a true local max) broke pure-tone detection instead - a
+   bare sine's autocorrelation is one smooth lobe with no real secondary
+   peak, and the naive threshold grabbed a spurious point on that lobe's
+   shoulder (220Hz measured as 234.57Hz). Also revealed a real test-
+   methodology lesson: a pure sine can't validate PSOLA at all (summing
+   time-shifted copies of one sine algebraically stays at that same
+   frequency) - a harmonically-rich sawtooth is the valid test signal.
+
+**Final verified accuracy** (sawtooth test signal, harmonically rich
+like a real voice): pitch-up shift landed within 0.3% of target,
+pitch-down within 0.45%, autotune correction within 0.5% - all at the
+theoretical limit of integer-sample-period quantization at 22050Hz, not
+approximate.
+
+**Live production verification** (not just local): a real 180s
+full-song request produced a genuine 170.6s house track; a real vocal
+upload with autotune strength=0.85 + double, pulled directly off the
+production server (not the mixed-down master, which is too noisy for a
+clean pitch check), measured 220.5Hz against an expected ~219.4Hz; a
+reverb+preset rerender changed 97.3% of output samples vs. baseline.
+35/35 native tests, 8/8 beatstudio.lz tests. srv66 disk unchanged
+(26G/49G), zero errors in beatstudio_process.log across the whole
+session.
 
 ## Why
 
