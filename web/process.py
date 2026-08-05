@@ -208,6 +208,29 @@ def read_track_gain(project, name):
     return None
 
 
+def project_is_budgeted(project):
+    """True only for a project that went through the REAL `init
+    --budget=1000` process_uploaded runs - never true for the FREE
+    beat-only preview project process_beat_requested creates (`init
+    --budget=0`, PLAN2.md Phase C's "Generate a new beat" button).
+
+    A real regression this fixed: both write to the exact same
+    d/project.json path. PLAN6.md Phase Q's retake detection originally
+    checked plain file EXISTENCE, which made the (very common - "Choose
+    your beat" is the first thing on the page) case of a visitor
+    previewing a beat before ever recording look identical to a retake:
+    process_uploaded would skip its own init call and silently keep the
+    beat-preview project's budget_cents=0 forever, so the LATER paid
+    master step failed outright ("can't afford a professional master,
+    $2.00 needed, $0.00 remaining") for every such visitor - caught live
+    via a real user's error report, not in testing."""
+    try:
+        with open(project) as f:
+            return json.load(f).get("budget_cents", 0) > 0
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
 def find_take_file(d, index):
     for path in glob.glob(os.path.join(d, "take_%d_raw.*" % index)):
         return path
@@ -501,12 +524,16 @@ def process_uploaded(session_id, d):
 
     beat = load_beat(d)
     project = os.path.join(d, "project.json")
-    # PLAN6.md Phase Q: a project.json that ALREADY exists means this is a
-    # RETAKE landing back here after a "preview_ready" checkpoint (see
-    # process_finalize/publish_preview below) - the beat/melody are
-    # already generated and rendered, so skip straight to re-importing the
-    # vocal. Only a genuinely first-time upload runs init/generate/render.
-    is_retake = os.path.exists(project)
+    # PLAN6.md Phase Q: a project.json that's already been through the
+    # REAL (budgeted) init means this is a RETAKE landing back here after
+    # a "preview_ready" checkpoint (see process_finalize/publish_preview
+    # below) - the beat/melody are already generated and rendered, so
+    # skip straight to re-importing the vocal. Only a genuinely first-time
+    # upload runs init/generate/render. Checking budget rather than plain
+    # file existence on purpose - see project_is_budgeted's own comment
+    # for the real regression that distinction fixes (a free beat-only
+    # preview project sharing this exact same file path).
+    is_retake = project_is_budgeted(project)
     if not is_retake:
         p = run(BEATSTUDIO + ["init", "--budget=1000", "--file=" + project])
         if p.returncode != 0:
