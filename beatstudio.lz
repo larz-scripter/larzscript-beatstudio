@@ -1464,7 +1464,7 @@ fn semitone_in_scale(s, key_root, scale_intervals) {
   return within in scale_intervals
 }
 
-# Finds the nearest allowed note to `freq` by real musical (ratio)
+# Finds the nearest allowed SEMITONE to `freq` by real musical (ratio)
 # distance, not raw Hz difference - a linear scan over a fixed +/-40
 # semitone window around A4 (comfortably covers the whole
 # AUTOTUNE_MIN_FREQ..AUTOTUNE_MAX_FREQ vocal range) since this
@@ -1472,20 +1472,60 @@ fn semitone_in_scale(s, key_root, scale_intervals) {
 # frequency from A4" directly - reusing note_freq's own forward
 # semitones->frequency mapping and searching is simpler and exact, not
 # an approximation.
-fn nearest_note_freq(freq, key_root, scale_intervals) {
+fn nearest_note_semitone(freq, key_root, scale_intervals) {
   let best_dist = 1000000000.0
-  let best_freq = freq
+  let best_s = 0
   let s = -40
   while s <= 20 {
     let allowed = scale_intervals == nil or semitone_in_scale(s, key_root, scale_intervals)
     if allowed {
       let cand = midi_freq(s)
       let dist = cand > freq ? cand / freq : freq / cand
-      if dist < best_dist { best_dist = dist; best_freq = cand }
+      if dist < best_dist { best_dist = dist; best_s = s }
     }
     s = s + 1
   }
-  return best_freq
+  return best_s
+}
+
+fn nearest_note_freq(freq, key_root, scale_intervals) {
+  return midi_freq(nearest_note_semitone(freq, key_root, scale_intervals))
+}
+
+# ---- diatonic scale-degree helpers (PLAN5.md Phase M) - the building
+# blocks a chord-aware harmonizer needs: converting a semitone into "how
+# many scale steps above the key root" and back, so a "third above"
+# request can land on a major OR minor third automatically depending on
+# where in the scale the note falls, instead of one fixed semitone
+# count. ----
+
+# Assumes `s` is ALREADY an in-scale semitone (e.g. the output of
+# nearest_note_semitone with the same key_root/scale_intervals) - finds
+# which of the scale's own steps it lands on.
+fn semitone_to_degree(s, key_root, scale_intervals) {
+  let rel = s - key_root
+  let octave = floor(rel / 12.0)
+  let within = int(rel - octave * 12.0)
+  let idx = 0
+  let i = 0
+  while i < len(scale_intervals) {
+    if scale_intervals[i] == within { idx = i }
+    i = i + 1
+  }
+  return {"octave": octave, "idx": idx}
+}
+
+# Inverse of semitone_to_degree - `idx` can be any integer (negative or
+# >= len(scale_intervals)); wraps into the neighboring octave as needed,
+# the same way stepping "up a third" from the top of a scale correctly
+# lands one octave higher instead of erroring.
+fn degree_to_semitone(key_root, scale_intervals, octave, idx) {
+  let n = len(scale_intervals)
+  let oct = octave
+  let i = idx
+  while i < 0 { i = i + n; oct = oct - 1 }
+  while i >= n { i = i - n; oct = oct + 1 }
+  return key_root + oct * 12 + scale_intervals[i]
 }
 
 fn cmd_autotune(a) {
@@ -1573,6 +1613,99 @@ fn cmd_autotune(a) {
   save_project(path, p)
   print(name + ": autotuned (strength=" + str(strength) + ", " + str(corrected_frames) + "/" + str(len(pitch_track)) +
         " voiced frames corrected) -> " + out_path)
+}
+
+# ---- chord-aware auto-harmony (PLAN5.md Phase M) -----------------------
+# A real backing-vocal-harmony generator - DIATONIC (scale-degree) offset,
+# not a fixed semitone shift, so "a third above" automatically becomes a
+# major or minor third depending on where in the scale a note falls, the
+# way a real harmonizer works. Genuinely CHORD-aware, not just key-aware:
+# the active scale is re-derived from whichever chord is actually
+# sounding at each moment (via the project's own p["chords"]/bar timing
+# from Phase E), not one fixed scale for the whole song - a vocal
+# harmonized over a I-vi-IV-V progression gets a different scale locally
+# under the vi chord than under the I chord, matching how a real backing
+# arrangement follows the chart bar by bar.
+let INTERVAL_STEPS = {"third": 2, "fifth": 4}
+
+fn cmd_harmonize(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 {
+    fail("usage: harmonize NAME [--interval=third|fifth] [--gain=DB] [--as=NEWNAME]")
+  }
+  let name = a["positional"][0]
+  let p = load_project(path)
+  let idx = find_track(p, name)
+  if idx < 0 { fail("no track named '" + name + "'") }
+  if not p.has("chords") or len(p["chords"]) == 0 {
+    fail("no chord progression on this project - run 'generate' first (harmonize follows the song's actual chords, unlike `double`)")
+  }
+  let track = p["tracks"][idx]
+  let duration_s = track["total_samples"] / float(SAMPLE_RATE)
+  if duration_s > WHOLE_TRACK_MAX_SECONDS {
+    fail("'" + name + "' is " + str(round(duration_s, 1)) + "s - harmonize only supports up to " +
+         str(WHOLE_TRACK_MAX_SECONDS) + "s clips (same whole-buffer reason as `double`/`autotune`)")
+  }
+
+  let interval_name = argmod.flag(a, "interval", "third")
+  if not INTERVAL_STEPS.has(interval_name) { fail("unknown interval '" + interval_name + "' - choices: third, fifth") }
+  let degree_steps = INTERVAL_STEPS[interval_name]
+  let gain_db = float(argmod.flag(a, "gain", "-6.0"))
+  let new_name = argmod.flag(a, "as", name + "_harmony")
+
+  let samples = track_read(track, 0, track["total_samples"])
+  let pitch_track = _native_detect_pitch_track(samples, SAMPLE_RATE, AUTOTUNE_MIN_FREQ, AUTOTUNE_MAX_FREQ, AUTOTUNE_FRAME_SIZE, AUTOTUNE_HOP_SIZE)
+
+  let bpm = p["bpm"]
+  let bar_dur = 60.0 / bpm / 4.0 * STEPS
+  let num_bars = len(p["chords"])
+
+  let periods = []
+  let ratios = []
+  let harmonized_frames = 0
+  for f in pitch_track {
+    periods.push(f["period"])
+    if f["voiced"] {
+      let t_sec = f["pos"] / float(SAMPLE_RATE)
+      let bar_idx = int(t_sec / bar_dur)
+      if bar_idx >= num_bars { bar_idx = num_bars - 1 }
+      if bar_idx < 0 { bar_idx = 0 }
+      let chord = p["chords"][bar_idx]
+      # Minor-family chord qualities get the minor scale, everything else
+      # (major/major7/dom7) gets major - a real, if simplified, mapping
+      # from chord quality to the scale a backing harmony would follow.
+      let scale = (chord["q"] == "minor" or chord["q"] == "minor7") ? SCALES["minor"] : SCALES["major"]
+      let chord_root = p["key_root_semitone"] + chord["deg"]
+      let detected_freq = SAMPLE_RATE / float(f["period"])
+      let base_semitone = nearest_note_semitone(detected_freq, chord_root, scale)
+      let deg = semitone_to_degree(base_semitone, chord_root, scale)
+      let target_semitone = degree_to_semitone(chord_root, scale, deg["octave"], deg["idx"] + degree_steps)
+      let target_freq = midi_freq(target_semitone)
+      # Ratio computed against the ORIGINAL detected pitch (not the
+      # quantized base_semitone) - the harmony line still tracks the
+      # singer's real pitch contour/vibrato, just offset, rather than
+      # sounding like a separate hard-quantized performance.
+      ratios.push(target_freq / detected_freq)
+      harmonized_frames = harmonized_frames + 1
+    } else {
+      ratios.push(1.0)
+    }
+  }
+
+  let harmony = _native_psola_shift(samples, periods, ratios, AUTOTUNE_HOP_SIZE)
+
+  let out_path = dir_of(path) + "/" + new_name + ".wav"
+  let w = wav.open_write(out_path, SAMPLE_RATE, 1)
+  wav.write_chunk(w, harmony)
+  wav.close_write(w)
+
+  let info = probe_wav(out_path)
+  let new_track = {"name": new_name, "path": out_path, "data_start": info["data_start"],
+                    "total_samples": info["total_samples"], "gain_db": gain_db, "pan": 0.0, "mute": false}
+  upsert_track(p, new_track)
+  save_project(path, p)
+  print(new_name + ": " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path +
+        " (" + interval_name + " above, chord-aware, " + str(harmonized_frames) + "/" + str(len(pitch_track)) + " voiced frames)")
 }
 
 fn cmd_mix(a) {
@@ -2015,6 +2148,7 @@ cli.command(app, "track-import", "add an existing WAV as a track (any length): t
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
 cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] [--resample for the older pitch+tempo-together fallback method]", fn(a) { cmd_double(a) })
 cli.command(app, "autotune", "real pitch correction, in place (free, <=180s clips): autotune NAME --strength=0..1 [--key=SEMITONES-FROM-A4] [--scale=major|minor] - 0=off, low=natural, 1=hard-snap", fn(a) { cmd_autotune(a) })
+cli.command(app, "harmonize", "chord-aware auto-harmony as a new track (free, <=180s clips, needs a chord progression - run 'generate' first): harmonize NAME [--interval=third|fifth] [--gain=DB] [--as=NEWNAME]", fn(a) { cmd_harmonize(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
 cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--reverb-mix=] [--reverb-feedback=] [--clear]", fn(a) { cmd_strip(a) })
 cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })
