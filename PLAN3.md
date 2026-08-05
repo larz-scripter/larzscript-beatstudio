@@ -1,6 +1,69 @@
 # PLAN 3: melodic full-song engine, mix/master polish, voice tooling, UX overhaul
 
-Status: **planning, not yet built.**
+Status: **SHIPPED and DEPLOYED, 2026-08-05** (larzos.com/beatstudio/). All
+four phases (E/F/G/H) built, tested, and live. Real bugs found and fixed
+along the way (below), verified against the live production API with
+real audio, not just local runs. Native interpreter released as
+**native-v1.39.0**.
+
+**What shipped, in one line each:**
+- **E**: real bass+chords on every generated beat by default (genre-aware
+  progressions, e.g. trap/boombap's natural-minor i-VI-III-VII loop) -
+  the actual "full song" unlock. `--no-melody` opts out.
+- **F**: sidechain ducking, stereo widening, harmonic saturation, a real
+  delay/echo line, per-track EQ+compressor channel strips, 3 mastering
+  presets (loud/warm/clean) - 3 new native builtins
+  (`_native_saturate_buffer`/`_native_stereo_widen`/
+  `_native_delay_process_buffer`).
+- **G**: a generic per-track channel strip (built in F, reused as-is for
+  the vocal) + delay/reverb send + a "quick double" harmony/thickening
+  effect via playback-rate resampling.
+- **H**: all of the above wired into the actual web pipeline (melody
+  toggle, a 3rd "Bass & chords" mixer track, collapsed Advanced
+  EQ/comp/duck/delay sections, one-click presets), plus real waveform
+  rendering, a live input meter while recording, and matching docs.html
+  entries.
+
+**Real bugs found via signal analysis, not code review** (matches this
+project's established verification discipline):
+1. `render_melody_bar` didn't limit its own output - a bass note landing
+   under the sustained chord pad summed past +/-1.0 (0.45% of samples
+   hard-clipped). Fixed the same way `render_pattern` already fixes the
+   identical drum-overlap case.
+2. `note_freq`'s octave math was a full octave off for negative,
+   non-12-multiple semitone values (a real `//`/`%` inconsistency) -
+   silently affected Phase E's own bass notes for chords like the
+   trap/boombap/house VI chord, not just Phase G's `double`. Confirmed
+   fixed via an independent calculation: `midi_freq(-16)` now returns
+   174.614Hz, exact.
+3. `note_freq` also silently produced ZERO pitch shift for fractional
+   semitones (a float truncated into an integer list index) - would have
+   made Phase G's default "quick double" (0.15 semitones) audibly inert.
+   Fixed with linear interpolation between neighboring semitone ratios.
+4. `double`'s resample call had `from_rate`/`to_rate` swapped - a
+   pitch-UP request produced a LONGER clip instead of shorter. Caught by
+   measuring actual duration and dominant frequency against independent
+   expected values, not by trusting the command's own printed output.
+
+**Live verification (not just local)**: deployed to srv66 (native
+interpreter self-update, `dsp` package `pkg update` - verified for real
+via direct grep, not trusted blindly), ran real HTTP requests against
+the actual production API (`larzos.com/beatstudio/api/...`) - a real
+beat-generation request confirmed `melody: true`, a real vocal upload
+produced a genuine 3-track (beat/melody/vocal) mastered file, and a real
+rerender with duck-from/delay/EQ/the "warm" preset changed 99.3% of
+output samples vs. the plain baseline - the whole new pipeline is
+genuinely active on the live site, not just passing local tests. 35/35
+native interpreter tests still pass; beatstudio.lz's own suite is 7/7.
+
+**Deliberately not built** (same honest scope discipline as every
+earlier phase of this project): a full drag-and-drop take-reorder
+rewrite (still no browser available to verify dragging - the existing
+button-based reorder stays); true pitch correction/autotune and spectral
+noise reduction (both need FFT/phase-vocoder infrastructure `dsp`
+genuinely doesn't have anywhere); a real algorithmic reverb beyond the
+single-tap feedback delay shipped in Phase F (a good v2 once the
+delay-line primitive is proven in the wild).
 
 ## Why
 
