@@ -433,6 +433,12 @@ fn track_read(track, abs_start, n) {
 
 fn ceil_div(a, b) { return (a + b - 1) // b }
 
+# Dict-get-with-default - lets per-track channel-strip fields (PLAN3.md
+# Phase F) stay OPTIONAL on every track dict (nil/absent = "no
+# processing set") instead of every track-creation call site needing to
+# know about them up front.
+fn tget(d, key, default) { return d.has(key) ? d[key] : default }
+
 # ---- persistence ----
 
 fn empty_pattern() {
@@ -1216,6 +1222,85 @@ fn cmd_mix(a) {
   print(name + ": gain=" + str(t["gain_db"]) + "dB pan=" + str(t["pan"]) + " mute=" + str(t["mute"]))
 }
 
+# Per-track channel strip (PLAN3.md Phase F/G): EQ, compression, sidechain
+# ducking (this track's level dips based on a NAMED other track's level -
+# the beat-ducks-under-the-vocal "pumping" effect), and a delay/echo send,
+# all OPTIONAL and stored directly on the track dict (nil/absent = off,
+# matching how gain_db/pan/mute already work). A generic per-track
+# facility on purpose, not a "vocal-only" or "beat-only" feature - Phase G
+# reuses exactly this for the vocal channel strip and delay send, no
+# separate mechanism needed.
+fn cmd_strip(a) {
+  let path = argmod.flag(a, "file", DEFAULT_PATH)
+  if len(a["positional"]) < 1 {
+    fail("usage: strip NAME [--eq-low=DB] [--eq-mid=DB] [--eq-high=DB] [--comp-thresh=DB] [--comp-ratio=R] [--duck-from=NAME] [--delay-ms=MS] [--delay-feedback=F] [--delay-mix=M] [--clear]")
+  }
+  let name = a["positional"][0]
+  let p = load_project(path)
+  let found = find_track(p, name)
+  if found < 0 { fail("no track named '" + name + "'") }
+  let t = p["tracks"][found]
+  if a["flags"].has("clear") {
+    for k in ["eq_low_db", "eq_mid_db", "eq_high_db", "comp_thresh_db", "comp_ratio", "duck_from", "delay_ms", "delay_feedback", "delay_mix"] {
+      if t.has(k) { t.remove(k) }
+    }
+  }
+  if a["flags"].has("eq-low") { t["eq_low_db"] = float(a["flags"]["eq-low"]) }
+  if a["flags"].has("eq-mid") { t["eq_mid_db"] = float(a["flags"]["eq-mid"]) }
+  if a["flags"].has("eq-high") { t["eq_high_db"] = float(a["flags"]["eq-high"]) }
+  if a["flags"].has("comp-thresh") { t["comp_thresh_db"] = float(a["flags"]["comp-thresh"]) }
+  if a["flags"].has("comp-ratio") { t["comp_ratio"] = float(a["flags"]["comp-ratio"]) }
+  if a["flags"].has("duck-from") {
+    let duck_name = a["flags"]["duck-from"]
+    if find_track(p, duck_name) < 0 { fail("--duck-from: no track named '" + duck_name + "'") }
+    t["duck_from"] = duck_name
+  }
+  if a["flags"].has("delay-ms") { t["delay_ms"] = float(a["flags"]["delay-ms"]) }
+  if a["flags"].has("delay-feedback") { t["delay_feedback"] = float(a["flags"]["delay-feedback"]) }
+  if a["flags"].has("delay-mix") { t["delay_mix"] = float(a["flags"]["delay-mix"]) }
+  p["tracks"][found] = t
+  save_project(path, p)
+  print(name + ": eq(" + str(tget(t, "eq_low_db", 0.0)) + "/" + str(tget(t, "eq_mid_db", 0.0)) + "/" + str(tget(t, "eq_high_db", 0.0)) +
+        "dB) comp(" + str(tget(t, "comp_thresh_db", nil)) + "dB x" + str(tget(t, "comp_ratio", nil)) +
+        ") duck_from=" + str(tget(t, "duck_from", nil)) +
+        " delay(" + str(tget(t, "delay_ms", 0.0)) + "ms fb=" + str(tget(t, "delay_feedback", 0.0)) + " mix=" + str(tget(t, "delay_mix", 0.0)) + ")")
+}
+
+# Builds this track's persistent channel-strip state ONCE per render (biquad
+# filters carry x1/x2/y1/y2, the compressor carries its envelope, the delay
+# line carries its circular buffer - all need to persist across chunk
+# calls the same way the master chain's own filters already do), or nil if
+# the track has no strip parameters set at all - skips the cost entirely
+# for the common case (most tracks use none of this), same discipline
+# render_pattern already uses to skip synthesizing unused drum voices.
+fn build_track_strip(track) {
+  let has_eq = tget(track, "eq_low_db", 0.0) != 0.0 or tget(track, "eq_mid_db", 0.0) != 0.0 or tget(track, "eq_high_db", 0.0) != 0.0
+  let has_comp = tget(track, "comp_thresh_db", nil) != nil
+  let has_duck = tget(track, "duck_from", nil) != nil
+  let has_delay = tget(track, "delay_ms", 0.0) > 0.0 and tget(track, "delay_mix", 0.0) > 0.0
+  if not (has_eq or has_comp or has_duck or has_delay) { return nil }
+  let st = {}
+  if has_eq {
+    st["low"] = dsp.biquad_shelf_new(200, tget(track, "eq_low_db", 0.0), SAMPLE_RATE, false)
+    st["mid"] = dsp.biquad_peaking_new(2000, tget(track, "eq_mid_db", 0.0), 0.8, SAMPLE_RATE)
+    st["high"] = dsp.biquad_shelf_new(6000, tget(track, "eq_high_db", 0.0), SAMPLE_RATE, true)
+  }
+  if has_comp {
+    st["comp"] = dsp.compressor_new(tget(track, "comp_thresh_db", -18.0), tget(track, "comp_ratio", 3.0), 8.0, 120.0, SAMPLE_RATE)
+  }
+  if has_duck {
+    st["duck_from"] = track["duck_from"]
+    # Fast attack / medium release relative to the master compressor above -
+    # a real "pumping" duck reacts quickly to the vocal coming in and lets
+    # go smoothly after it stops, not a slow general-purpose compression.
+    st["duck_comp"] = dsp.compressor_new(-24.0, 8.0, 5.0, 200.0, SAMPLE_RATE)
+  }
+  if has_delay {
+    st["delay"] = dsp.delay_new(tget(track, "delay_ms", 250.0), tget(track, "delay_feedback", 0.3), tget(track, "delay_mix", 0.0), SAMPLE_RATE)
+  }
+  return st
+}
+
 # ---- chunked mixing --------------------------------------------------
 
 fn active_tracks(p) {
@@ -1233,12 +1318,32 @@ fn mix_length_samples(p) {
 # Mixes exactly one chunk's worth (this_len <= CHUNK_SAMPLES mono
 # sample-frames) from every active track into interleaved stereo L/R
 # lists, at absolute position `start`. Only ever touches the small
-# per-track chunk file(s) needed for this one output chunk.
-fn mix_chunk(p, start, this_len) {
+# per-track chunk file(s) needed for this one output chunk. `track_states`
+# (built once per render by build_track_strip, keyed by track name) is
+# threaded through so per-track EQ/compressor/delay state carries
+# correctly across chunk boundaries, same as the master chain's filters.
+fn mix_chunk(p, start, this_len, track_states) {
   let l = [0.0] * this_len
   let r = [0.0] * this_len
   for tr in active_tracks(p) {
     let s = track_read(tr, start, this_len)
+    let st = track_states.has(tr["name"]) ? track_states[tr["name"]] : nil
+    if st != nil {
+      if st.has("low") {
+        s = dsp.biquad_process_buffer(st["low"], s)
+        s = dsp.biquad_process_buffer(st["mid"], s)
+        s = dsp.biquad_process_buffer(st["high"], s)
+      }
+      if st.has("comp") { s = dsp.compressor_process_buffer(st["comp"], s) }
+      if st.has("duck_comp") {
+        let didx = find_track(p, st["duck_from"])
+        if didx >= 0 {
+          let detector = track_read(p["tracks"][didx], start, this_len)
+          s = dsp.sidechain_process_buffer(st["duck_comp"], detector, s)
+        }
+      }
+      if st.has("delay") { s = dsp.delay_process_buffer(st["delay"], s) }
+    }
     let g = dsp.db_to_linear(tr["gain_db"])
     let pan_angle = (tr["pan"] + 1) / 2 * (PI / 2)
     let lg = dsp.cos_(pan_angle) * g
@@ -1261,6 +1366,16 @@ fn render_stream(p, out_path, master_params) {
   if total == 0 { fail("no audible tracks to mix - add a track first") }
   let w = wav.open_write(out_path, SAMPLE_RATE, 2)
 
+  # Per-track channel strips (PLAN3.md Phase F) - built ONCE for the whole
+  # render, same reason the master filters below are: their state (biquad
+  # history, compressor envelope, delay line) needs to persist across
+  # chunk boundaries, not get rebuilt fresh every chunk.
+  let track_states = {}
+  for tr in active_tracks(p) {
+    let st = build_track_strip(tr)
+    if st != nil { track_states[tr["name"]] = st }
+  }
+
   let filters = nil
   if master_params != nil {
     let low_l = dsp.biquad_shelf_new(200, master_params["low_db"], SAMPLE_RATE, false)
@@ -1274,6 +1389,12 @@ fn render_stream(p, out_path, master_params) {
     filters = {"low_l": low_l, "low_r": low_r, "mid_l": mid_l, "mid_r": mid_r,
                "high_l": high_l, "high_r": high_r, "comp": comp, "ceiling": ceiling}
   }
+  # width/saturation default to 1.0 (unchanged) / 0 (off) via
+  # master_params_from_flags below - both are skipped entirely rather than
+  # called as a no-op, so a plain master render with neither set behaves
+  # byte-identically to before this phase.
+  let width = master_params != nil ? tget(master_params, "width", 1.0) : 1.0
+  let saturation_drive = master_params != nil ? tget(master_params, "saturation_drive", 0.0) : 0.0
 
   let peak = 0.0
   let sum_sq = 0.0
@@ -1284,10 +1405,25 @@ fn render_stream(p, out_path, master_params) {
     let start = c * CHUNK_SAMPLES
     let this_len = total - start
     if this_len > CHUNK_SAMPLES { this_len = CHUNK_SAMPLES }
-    let mixed = mix_chunk(p, start, this_len)
+    let mixed = mix_chunk(p, start, this_len, track_states)
     let l = mixed["l"]
     let r = mixed["r"]
     if filters != nil {
+      # Stereo widening, then saturation, both ahead of the fused
+      # EQ->compressor->limiter block below - keeps the limiter as the
+      # true final word on peak (nothing runs after it that could push a
+      # sample back over the ceiling), and matches common mastering-chain
+      # practice of coloration/width shaping happening before the final
+      # loudness/limiting stage, not after it.
+      if width != 1.0 {
+        let widened = dsp.stereo_widen(l, r, width)
+        l = widened["l"]
+        r = widened["r"]
+      }
+      if saturation_drive > 0.0 {
+        l = dsp.saturate_buffer(l, saturation_drive)
+        r = dsp.saturate_buffer(r, saturation_drive)
+      }
       _native_master_block(filters["low_l"], filters["mid_l"], filters["high_l"],
                             filters["low_r"], filters["mid_r"], filters["high_r"],
                             filters["comp"], l, r, filters["ceiling"])
@@ -1339,6 +1475,19 @@ fn cmd_preview(a) {
   print("peak: " + str(round(result["peak_dbfs"], 2)) + " dBFS")
 }
 
+# Mastering-style presets (PLAN3.md Phase F): a preset just picks the
+# SAME parameters a user could dial in by hand via the flags below - no
+# new chain stages, just sensible starting points for a genre-agnostic
+# "make it sound like X" request. Explicit flags still override a preset
+# field-by-field (see master_params_from_flags), so "--preset=warm
+# --ceiling=-2" works exactly as you'd expect.
+fn mastering_preset(name) {
+  if name == "loud" { return {"low":2.0,"mid":1.0,"high":3.0,"thresh":-18.0,"ratio":4.0,"ceiling":-0.5,"width":1.15,"saturation":1.5} }
+  if name == "warm" { return {"low":3.0,"mid":-0.5,"high":1.0,"thresh":-16.0,"ratio":2.5,"ceiling":-1.0,"width":1.0,"saturation":2.5} }
+  if name == "clean" { return {"low":0.5,"mid":0.0,"high":1.0,"thresh":-12.0,"ratio":2.0,"ceiling":-1.0,"width":1.0,"saturation":0.0} }
+  fail("unknown preset '" + name + "' - choices: loud, warm, clean")
+}
+
 fn master_params_from_flags(a) {
   # Real units, friendly names live in the web layer above this CLI:
   #   low/mid/high  = "Warmth"/"Clarity"/"Air" (dB, EQ shelves/peak)
@@ -1350,14 +1499,22 @@ fn master_params_from_flags(a) {
   #     compressed+limited material's true peak already sits right at
   #     the ceiling in practice, so a limiter ceiling *is* the loudness
   #     target for this chain, not an approximation of one.
-  let low_db = float(argmod.flag(a, "low", "1.5"))
-  let mid_db = float(argmod.flag(a, "mid", "0"))
-  let high_db = float(argmod.flag(a, "high", "2"))
-  let thresh_db = float(argmod.flag(a, "thresh", "-14.0"))
-  let ratio = float(argmod.flag(a, "ratio", "3.0"))
-  let ceiling_db = float(argmod.flag(a, "ceiling", "-1.0"))
+  #   width         = stereo width (1.0 unchanged, >1 wider, <1 narrower)
+  #   saturation    = harmonic saturation drive (0 = off)
+  let preset_name = argmod.flag(a, "preset", nil)
+  let base = preset_name != nil ? mastering_preset(preset_name) :
+    {"low":1.5,"mid":0.0,"high":2.0,"thresh":-14.0,"ratio":3.0,"ceiling":-1.0,"width":1.0,"saturation":0.0}
+  let low_db = float(argmod.flag(a, "low", str(base["low"])))
+  let mid_db = float(argmod.flag(a, "mid", str(base["mid"])))
+  let high_db = float(argmod.flag(a, "high", str(base["high"])))
+  let thresh_db = float(argmod.flag(a, "thresh", str(base["thresh"])))
+  let ratio = float(argmod.flag(a, "ratio", str(base["ratio"])))
+  let ceiling_db = float(argmod.flag(a, "ceiling", str(base["ceiling"])))
+  let width = float(argmod.flag(a, "width", str(base["width"])))
+  let saturation = float(argmod.flag(a, "saturation", str(base["saturation"])))
   return {"low_db": low_db, "mid_db": mid_db, "high_db": high_db,
-          "thresh_db": thresh_db, "ratio": ratio, "ceiling_db": ceiling_db}
+          "thresh_db": thresh_db, "ratio": ratio, "ceiling_db": ceiling_db,
+          "width": width, "saturation_drive": saturation}
 }
 
 fn run_master_render(path, p, master_params, price_cents) {
@@ -1477,9 +1634,10 @@ cli.command(app, "record", "capture a track from the mic (hosted-only, needs are
 cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
+cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--clear]", fn(a) { cmd_strip(a) })
 cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })
-cli.command(app, "master", "paid: full EQ->compressor->limiter chain: master --price=DOLLARS [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=]", fn(a) { cmd_master(a) })
-cli.command(app, "remaster", "free after the first paid master: re-render with new settings, no re-charge: remaster [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=]", fn(a) { cmd_remaster(a) })
+cli.command(app, "master", "paid: full EQ->compressor->limiter chain: master --price=DOLLARS [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=]", fn(a) { cmd_master(a) })
+cli.command(app, "remaster", "free after the first paid master: re-render with new settings, no re-charge: remaster [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=]", fn(a) { cmd_remaster(a) })
 cli.command(app, "report", "show the pattern, tracks, and budget", fn(a) { cmd_report(a) })
 
 cli.run(app, args)
