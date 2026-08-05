@@ -1349,6 +1349,13 @@ fn cmd_voice_edit(a) {
 # introduces real audible discontinuities at chunk boundaries).
 let WHOLE_TRACK_MAX_SECONDS = 180.0
 
+# Shared pitch-detection tuning (PLAN4.md Phase J/K) - used by both
+# `double`'s PSOLA path below and `autotune` further down.
+let AUTOTUNE_MIN_FREQ = 70.0
+let AUTOTUNE_MAX_FREQ = 800.0
+let AUTOTUNE_FRAME_SIZE = 1024
+let AUTOTUNE_HOP_SIZE = 512
+
 fn cmd_double(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   if len(a["positional"]) < 1 { fail("usage: double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME]") }
@@ -1365,23 +1372,47 @@ fn cmd_double(a) {
   }
   # Default 0.15 semitones (~15 cents): a natural "quick double" thickening
   # effect with no audible pitch/tempo change. A real harmony interval
-  # (e.g. --semitones=4 for a major third) works the same way, just with
-  # the pitch/tempo shift now genuinely audible - that tradeoff is real
-  # and disclosed above, not hidden behind a friendlier default.
+  # (e.g. --semitones=4 for a major third) works the same way.
   let semitones = float(argmod.flag(a, "semitones", "0.15"))
   let gain_db = float(argmod.flag(a, "gain", "-4.0"))
   let new_name = argmod.flag(a, "as", name + "_double")
+  # PLAN4.md Phase K: real PSOLA pitch-shift by default now that
+  # autotune's engine exists (genuinely tempo-preserving, fixing the
+  # honest limitation the resample-only version disclosed) - --resample
+  # keeps the original, simpler method available as an explicit fallback
+  # (e.g. if a clip has too little detectably-voiced content for PSOLA
+  # to do anything useful with).
+  let use_resample = a["flags"].has("resample")
 
   let samples = track_read(track, 0, track["total_samples"])
   let ratio = note_freq(1.0, semitones)
-  # dsp.resample(x, from_rate, to_rate) produces in_n*to_rate/from_rate
-  # samples - to make the clip genuinely PLAY FASTER/HIGHER (ratio > 1
-  # raises pitch), it needs FEWER output samples, so `ratio` goes on
-  # from_rate (the larger side), not to_rate. Caught by real signal
-  # analysis, not assumed: the first version of this line had the two
-  # arguments swapped and produced a LONGER clip for a pitch-UP request -
-  # exactly backwards.
-  let shifted = dsp.resample(samples, SAMPLE_RATE * ratio, SAMPLE_RATE)
+  let shifted = nil
+  let method_note = ""
+  if use_resample {
+    # dsp.resample(x, from_rate, to_rate) produces in_n*to_rate/from_rate
+    # samples - to make the clip genuinely PLAY FASTER/HIGHER (ratio > 1
+    # raises pitch), it needs FEWER output samples, so `ratio` goes on
+    # from_rate (the larger side), not to_rate. Caught by real signal
+    # analysis, not assumed: an earlier version of this line had the two
+    # arguments swapped and produced a LONGER clip for a pitch-UP
+    # request - exactly backwards.
+    shifted = dsp.resample(samples, SAMPLE_RATE * ratio, SAMPLE_RATE)
+    method_note = "pitch+tempo both shifted (--resample fallback)"
+  } else {
+    let pitch_track = _native_detect_pitch_track(samples, SAMPLE_RATE, AUTOTUNE_MIN_FREQ, AUTOTUNE_MAX_FREQ, AUTOTUNE_FRAME_SIZE, AUTOTUNE_HOP_SIZE)
+    let periods = []
+    let ratios = []
+    # Only voiced frames get shifted - unvoiced content (consonants,
+    # breath, silence) has no real periodicity for PSOLA to work with,
+    # and real vocal doublers/harmonizers leave that content untouched
+    # too, same as autotune's own voiced gate above.
+    for f in pitch_track {
+      periods.push(f["period"])
+      ratios.push(f["voiced"] ? ratio : 1.0)
+    }
+    shifted = _native_psola_shift(samples, periods, ratios, AUTOTUNE_HOP_SIZE)
+    method_note = "tempo-preserving pitch shift"
+  }
 
   let out_path = dir_of(path) + "/" + new_name + ".wav"
   let w = wav.open_write(out_path, SAMPLE_RATE, 1)
@@ -1394,14 +1425,15 @@ fn cmd_double(a) {
   upsert_track(p, new_track)
   save_project(path, p)
   print(new_name + ": " + str(round(info["total_samples"] / float(SAMPLE_RATE), 2)) + "s -> " + out_path +
-        " (" + str(semitones) + " semitones from '" + name + "', pitch+tempo both shifted)")
+        " (" + str(semitones) + " semitones from '" + name + "', " + method_note + ")")
 }
 
 # ---- real pitch correction / "autotune" (PLAN4.md Phase J) ------------
-# Real TD-PSOLA - genuinely shifts pitch WITHOUT changing tempo, unlike
-# `double` above's resample trick (which changes both, disclosed there as
-# a real, cheaper-technique limitation). No FFT anywhere - dsp still has
-# none - autocorrelation pitch detection + pitch-synchronous overlap-add
+# Real TD-PSOLA - genuinely shifts pitch WITHOUT changing tempo. `double`
+# above uses this SAME engine by default now (Phase K) - only its
+# explicit --resample fallback still changes pitch and tempo together.
+# No FFT anywhere - dsp still has none - autocorrelation pitch detection
+# + pitch-synchronous overlap-add
 # resynthesis are the standard NON-FFT techniques real pitch-correction
 # tools use. Both new native builtins
 # (_native_detect_pitch_track/_native_psola_shift) went through 3 real,
@@ -1414,11 +1446,6 @@ fn cmd_double(a) {
 # against an independently-computed expected value, not by trusting the
 # construction - the same discipline this file's own comments have
 # documented since Phase E's note_freq bugs.
-
-let AUTOTUNE_MIN_FREQ = 70.0
-let AUTOTUNE_MAX_FREQ = 800.0
-let AUTOTUNE_FRAME_SIZE = 1024
-let AUTOTUNE_HOP_SIZE = 512
 
 # Real scale intervals (semitones above the scale's own root) for the
 # optional --scale= lock. Default (no --scale given) is fully chromatic -
@@ -1575,7 +1602,7 @@ fn cmd_mix(a) {
 fn cmd_strip(a) {
   let path = argmod.flag(a, "file", DEFAULT_PATH)
   if len(a["positional"]) < 1 {
-    fail("usage: strip NAME [--eq-low=DB] [--eq-mid=DB] [--eq-high=DB] [--comp-thresh=DB] [--comp-ratio=R] [--duck-from=NAME] [--delay-ms=MS] [--delay-feedback=F] [--delay-mix=M] [--clear]")
+    fail("usage: strip NAME [--eq-low=DB] [--eq-mid=DB] [--eq-high=DB] [--comp-thresh=DB] [--comp-ratio=R] [--duck-from=NAME] [--delay-ms=MS] [--delay-feedback=F] [--delay-mix=M] [--reverb-mix=M] [--reverb-feedback=F] [--clear]")
   }
   let name = a["positional"][0]
   let p = load_project(path)
@@ -1583,7 +1610,7 @@ fn cmd_strip(a) {
   if found < 0 { fail("no track named '" + name + "'") }
   let t = p["tracks"][found]
   if a["flags"].has("clear") {
-    for k in ["eq_low_db", "eq_mid_db", "eq_high_db", "comp_thresh_db", "comp_ratio", "duck_from", "delay_ms", "delay_feedback", "delay_mix"] {
+    for k in ["eq_low_db", "eq_mid_db", "eq_high_db", "comp_thresh_db", "comp_ratio", "duck_from", "delay_ms", "delay_feedback", "delay_mix", "reverb_mix", "reverb_feedback"] {
       if t.has(k) { t.remove(k) }
     }
   }
@@ -1600,12 +1627,15 @@ fn cmd_strip(a) {
   if a["flags"].has("delay-ms") { t["delay_ms"] = float(a["flags"]["delay-ms"]) }
   if a["flags"].has("delay-feedback") { t["delay_feedback"] = float(a["flags"]["delay-feedback"]) }
   if a["flags"].has("delay-mix") { t["delay_mix"] = float(a["flags"]["delay-mix"]) }
+  if a["flags"].has("reverb-mix") { t["reverb_mix"] = float(a["flags"]["reverb-mix"]) }
+  if a["flags"].has("reverb-feedback") { t["reverb_feedback"] = float(a["flags"]["reverb-feedback"]) }
   p["tracks"][found] = t
   save_project(path, p)
   print(name + ": eq(" + str(tget(t, "eq_low_db", 0.0)) + "/" + str(tget(t, "eq_mid_db", 0.0)) + "/" + str(tget(t, "eq_high_db", 0.0)) +
         "dB) comp(" + str(tget(t, "comp_thresh_db", nil)) + "dB x" + str(tget(t, "comp_ratio", nil)) +
         ") duck_from=" + str(tget(t, "duck_from", nil)) +
-        " delay(" + str(tget(t, "delay_ms", 0.0)) + "ms fb=" + str(tget(t, "delay_feedback", 0.0)) + " mix=" + str(tget(t, "delay_mix", 0.0)) + ")")
+        " delay(" + str(tget(t, "delay_ms", 0.0)) + "ms fb=" + str(tget(t, "delay_feedback", 0.0)) + " mix=" + str(tget(t, "delay_mix", 0.0)) + ")" +
+        " reverb(mix=" + str(tget(t, "reverb_mix", 0.0)) + " fb=" + str(tget(t, "reverb_feedback", 0.0)) + ")")
 }
 
 # Builds this track's persistent channel-strip state ONCE per render (biquad
@@ -1620,7 +1650,11 @@ fn build_track_strip(track) {
   let has_comp = tget(track, "comp_thresh_db", nil) != nil
   let has_duck = tget(track, "duck_from", nil) != nil
   let has_delay = tget(track, "delay_ms", 0.0) > 0.0 and tget(track, "delay_mix", 0.0) > 0.0
-  if not (has_eq or has_comp or has_duck or has_delay) { return nil }
+  # PLAN4.md Phase K: a real algorithmic reverb, alongside (not instead
+  # of) the single-tap delay/echo above - genuinely different effects a
+  # track can use independently or together.
+  let has_reverb = tget(track, "reverb_mix", 0.0) > 0.0
+  if not (has_eq or has_comp or has_duck or has_delay or has_reverb) { return nil }
   let st = {}
   if has_eq {
     st["low"] = dsp.biquad_shelf_new(200, tget(track, "eq_low_db", 0.0), SAMPLE_RATE, false)
@@ -1639,6 +1673,9 @@ fn build_track_strip(track) {
   }
   if has_delay {
     st["delay"] = dsp.delay_new(tget(track, "delay_ms", 250.0), tget(track, "delay_feedback", 0.3), tget(track, "delay_mix", 0.0), SAMPLE_RATE)
+  }
+  if has_reverb {
+    st["reverb"] = dsp.reverb_new(tget(track, "reverb_feedback", 0.4), tget(track, "reverb_mix", 0.0), SAMPLE_RATE)
   }
   return st
 }
@@ -1685,6 +1722,7 @@ fn mix_chunk(p, start, this_len, track_states) {
         }
       }
       if st.has("delay") { s = dsp.delay_process_buffer(st["delay"], s) }
+      if st.has("reverb") { s = dsp.reverb_process_buffer(st["reverb"], s) }
     }
     let g = dsp.db_to_linear(tr["gain_db"])
     let pan_angle = (tr["pan"] + 1) / 2 * (PI / 2)
@@ -1975,10 +2013,10 @@ cli.command(app, "melody-render", "synthesize the bass+chords arrangement to its
 cli.command(app, "record", "capture a track from the mic (hosted-only, needs arecord+ffmpeg): record NAME --seconds=N", fn(a) { cmd_record(a) })
 cli.command(app, "track-import", "add an existing WAV as a track (any length): track-import PATH --name=NAME", fn(a) { cmd_track_import(a) })
 cli.command(app, "voice-edit", "edit a track in place (free): voice-edit NAME [--fade-in=SEC] [--fade-out=SEC] [--autotrim] [--gate] [--deess]", fn(a) { cmd_voice_edit(a) })
-cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] - changes pitch AND tempo together, see the command's own note", fn(a) { cmd_double(a) })
+cli.command(app, "double", "quick double/harmony as a new track (free, <=180s clips): double NAME [--semitones=N] [--gain=DB] [--as=NEWNAME] [--resample for the older pitch+tempo-together fallback method]", fn(a) { cmd_double(a) })
 cli.command(app, "autotune", "real pitch correction, in place (free, <=180s clips): autotune NAME --strength=0..1 [--key=SEMITONES-FROM-A4] [--scale=major|minor] - 0=off, low=natural, 1=hard-snap", fn(a) { cmd_autotune(a) })
 cli.command(app, "mix", "set a track's gain/pan/mute: mix NAME --gain=DB --pan=P --mute", fn(a) { cmd_mix(a) })
-cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--clear]", fn(a) { cmd_strip(a) })
+cli.command(app, "strip", "set a track's channel strip (free): strip NAME [--eq-low=] [--eq-mid=] [--eq-high=] [--comp-thresh=] [--comp-ratio=] [--duck-from=NAME] [--delay-ms=] [--delay-feedback=] [--delay-mix=] [--reverb-mix=] [--reverb-feedback=] [--clear]", fn(a) { cmd_strip(a) })
 cli.command(app, "preview", "free: mix only, no mastering chain", fn(a) { cmd_preview(a) })
 cli.command(app, "master", "paid: full EQ->compressor->limiter chain: master --price=DOLLARS [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=]", fn(a) { cmd_master(a) })
 cli.command(app, "remaster", "free after the first paid master: re-render with new settings, no re-charge: remaster [--preset=loud|warm|clean] [--low=] [--mid=] [--high=] [--thresh=] [--ratio=] [--ceiling=] [--width=] [--saturation=]", fn(a) { cmd_remaster(a) })

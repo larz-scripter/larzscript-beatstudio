@@ -2,8 +2,8 @@ project created: bpm=140, budget=$20.00
 generated trap beat: bpm=140 seed=11 -> 8 bars (13.7s), melody: key=-12 [{deg: 0, q: minor}, {deg: 8, q: major}, {deg: 3, q: major}, {deg: 10, q: major}]
 beat rendered: 13.71s -> PROJECT_DIR/beat.wav
 melody rendered: 13.71s -> PROJECT_DIR/melody.wav
-beat: eq(0/0/0dB) comp(nildB xnil) duck_from=melody delay(0ms fb=0 mix=0)
-melody: eq(-6/0/3dB) comp(-20dB x4) duck_from=nil delay(200ms fb=0.35 mix=0.3)
+beat: eq(0/0/0dB) comp(nildB xnil) duck_from=melody delay(0ms fb=0 mix=0) reverb(mix=0 fb=0)
+melody: eq(-6/0/3dB) comp(-20dB x4) duck_from=nil delay(200ms fb=0.35 mix=0.3) reverb(mix=0 fb=0)
 beat: gain=0dB pan=0 mute=false
 melody: gain=-6dB pan=0 mute=false
 preview (free, mix + safety limiter only, no EQ/compression): PROJECT_DIR/preview.wav
@@ -11,7 +11,7 @@ peak: -2.81 dBFS
 mastered -> PROJECT_DIR/master_1.wav
 peak: -1 dBFS, rms: -19.31 dBFS
 charged: $1.00, remaining: $19.00
-melody: eq(0/0/0dB) comp(nildB xnil) duck_from=nil delay(0ms fb=0 mix=0)
+melody: eq(0/0/0dB) comp(nildB xnil) duck_from=nil delay(0ms fb=0 mix=0) reverb(mix=0 fb=0)
 bpm: 140
 
 pattern 'fill':
