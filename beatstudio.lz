@@ -1239,9 +1239,22 @@ fn cmd_voice_edit(a) {
 
   let total = track["total_samples"]
   let trim_start = do_autotrim ? find_leading_silence_end(track, total) : 0
+  # Real production bug, found via a real user's actual recording (peak
+  # -70.3dBFS across a genuine 63s take - quiet, not silent, well under
+  # the -45dB threshold everywhere): find_leading_silence_end() returns
+  # `total` itself when NOTHING in the whole track crosses the
+  # threshold, which zeroed out edited_total below and hard-failed the
+  # ENTIRE upload over what's really just a quiet mic/room, not a
+  # missing recording. Autotrim is a convenience, not a hard
+  # requirement - clamping back to "nothing to trim" here means a
+  # uniformly-quiet take still goes through gate/de-ess/fades/mixing
+  # normally (gain during mixing is the right fix for "too quiet", not
+  # rejecting the recording outright) instead of blocking the visitor
+  # completely.
+  if trim_start >= total { trim_start = 0 }
   let edited_total = total - trim_start
   if edited_total <= 0 {
-    fail(name + ": auto-trim found no audio above the noise floor - try disabling it")
+    fail(name + ": recording is empty")
   }
 
   # Fixed, sensible presets (no exposed knobs yet - see PLAN2.md's
